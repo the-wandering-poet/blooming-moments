@@ -41,16 +41,48 @@ These were short-lived worktree threads. Their code changes were merged into `ma
   - Former branch: `codex/frontend-c`
   - Commit merged to main: `20fba67` via merge `e2feaa7`
   - Main change: clarified recipe/product-flow language connecting portfolio choice, scene analysis, and live coaching.
+  - Also contains the historical `Frontend Overall UI` high-fidelity static image generation history.
 
 ## High-Fidelity Design Source
 
-There is no separate Figma file in the repo right now. The high-fidelity design is implemented directly in SwiftUI.
+There is no separate Figma file in the repo right now. There is, however, a high-fidelity static UI redesign image set from the historical `Frontend Overall UI` thread.
+
+Important: this image set has not yet been fully implemented in SwiftUI. Treat it as the visual target/reference for future UI implementation work.
+
+Archived reference images:
+
+- `references/uiux/frontend-overall-ui/README.md`
+- `references/uiux/frontend-overall-ui/00-flow-board.png`
+- `references/uiux/frontend-overall-ui/01-welcome-root.png`
+- `references/uiux/frontend-overall-ui/02-scenario-select.png`
+- `references/uiux/frontend-overall-ui/03-curated-portfolio-feed.png`
+- `references/uiux/frontend-overall-ui/04-portfolio-detail-shot-recipe.png`
+- `references/uiux/frontend-overall-ui/05-subject-calibration.png`
+- `references/uiux/frontend-overall-ui/06-scene-choice.png`
+- `references/uiux/frontend-overall-ui/07-scan-surroundings.png`
+- `references/uiux/frontend-overall-ui/08-scene-analysis.png`
+- `references/uiux/frontend-overall-ui/09-realtime-live-coach.png`
+- `references/uiux/frontend-overall-ui/10-keeper-selection.png`
+- `references/uiux/frontend-overall-ui/11-ai-fine-tune-review.png`
+- `references/uiux/frontend-overall-ui/12-profile-saved-moments.png`
+- `references/uiux/frontend-overall-ui/13-use-current-scene.png`
+- `references/uiux/frontend-overall-ui/14-invite-tab.png`
+- `references/uiux/frontend-overall-ui/15-saved-moments-bottom-sheet.png`
+- `references/uiux/frontend-overall-ui/16-extra-generated-screen-or-revision.png`
+
+Historical source:
+
+- Thread title: `Frontend Overall UI`
+- Thread id: `019e84c8-ea3a-7ce0-bec7-72a69d5c72fb`
+- Original generated image cache: `/Users/annli/.codex/generated_images/019e84c8-ea3a-7ce0-bec7-72a69d5c72fb`
+
+The current SwiftUI implementation is the app baseline, not the final version of the image reference set.
 
 Primary file:
 
 - `AIPhotographer/ContentView.swift`
 
-Important implemented screens and flow areas:
+Important current SwiftUI screens and flow areas:
 
 - Welcome / opening page: `WelcomeView`
 - Scenario home: scenario cards and Blooming home surface
@@ -106,10 +138,10 @@ Frontend work is no longer split by frontend worktree. All frontend threads shou
 1. Run `git status --short --branch`.
 2. Confirm the branch is `main`.
 3. Read this handoff file and the relevant old thread history.
-4. Preserve current SwiftUI high-fidelity screens unless the user explicitly asks to redesign them.
+4. For visual redesign work, use `references/uiux/frontend-overall-ui/00-flow-board.png` and the relevant numbered screen PNG as the reference.
+5. Preserve current product logic and navigation unless the user explicitly asks to redesign the flow.
 
 Backend work remains separate for now on:
 
 - Branch: `codex/backend-flow-skeleton`
 - Worktree: `/Users/annli/.codex/worktrees/d65b/AI photographer`
-
