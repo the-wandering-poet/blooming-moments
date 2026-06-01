@@ -323,6 +323,7 @@ struct ContentView: View {
         case .portfolioDetail:
             PortfolioDetailView(
                 portfolio: selectedPortfolio,
+                selectedShotIndex: $selectedShotIndex,
                 continueAction: {
                     sceneCandidate = SceneCandidate(
                         title: selectedShot.location,
@@ -691,12 +692,17 @@ struct PortfolioListView: View {
 
 struct PortfolioDetailView: View {
     let portfolio: CuratedPortfolio
+    @Binding var selectedShotIndex: Int
     let continueAction: () -> Void
     let backAction: () -> Void
 
+    private var selectedShot: PortfolioShot {
+        portfolio.shots[min(selectedShotIndex, max(portfolio.shots.count - 1, 0))]
+    }
+
     var body: some View {
         ScrollView(showsIndicators: true) {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 20) {
                 HStack {
                     Button(action: backAction) {
                         Image(systemName: "chevron.left")
@@ -714,10 +720,26 @@ struct PortfolioDetailView: View {
                 PhotographerProfileHeader(portfolio: portfolio)
                     .padding(.horizontal, 20)
 
-                PortfolioMasonryGrid(shots: portfolio.shots)
+                PortfolioDirectionPanel(portfolio: portfolio, selectedShot: selectedShot)
+                    .padding(.horizontal, 20)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Choose the frame to borrow")
+                        .font(AppType.sectionTitle)
+                    Text("This becomes the reference for scene matching, posing, and the next capture flow.")
+                        .font(AppType.caption)
+                        .foregroundStyle(AppPalette.ivory.opacity(0.62))
+                        .lineSpacing(3)
+                }
+                .padding(.horizontal, 20)
+
+                PortfolioMasonryGrid(
+                    shots: portfolio.shots,
+                    selectedShotIndex: $selectedShotIndex
+                )
                     .padding(.horizontal, 12)
 
-                PrimaryButton(title: "Choose This Curated Portfolio", icon: "camera.viewfinder", action: continueAction)
+                PrimaryButton(title: "Choose \(selectedShot.title)", icon: "camera.viewfinder", action: continueAction)
                     .padding(.horizontal, 20)
                     .padding(.top, 2)
             }
@@ -732,12 +754,17 @@ struct PhotographerProfileHeader: View {
     let portfolio: CuratedPortfolio
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .center, spacing: 12) {
                 PhotographerAvatar(assetName: portfolio.assets.first ?? "HooverTower", name: portfolio.author)
                     .frame(width: 56, height: 56)
 
                 VStack(alignment: .leading, spacing: 3) {
+                    Text(portfolio.title)
+                        .font(AppType.micro)
+                        .kerning(2.2)
+                        .textCase(.uppercase)
+                        .foregroundStyle(AppPalette.gold)
                     Text(portfolio.author)
                         .font(AppType.screenTitle)
                         .lineLimit(1)
@@ -753,6 +780,57 @@ struct PhotographerProfileHeader: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
+    }
+}
+
+struct PortfolioDirectionPanel: View {
+    let portfolio: CuratedPortfolio
+    let selectedShot: PortfolioShot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(AppPalette.buttonText)
+                    .frame(width: 38, height: 38)
+                    .background(AppPalette.gold, in: Circle())
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(portfolio.styleSummary)
+                        .font(AppType.profileSection)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.88)
+                    Text(portfolio.locationSummary)
+                        .font(AppType.caption)
+                        .foregroundStyle(AppPalette.ivory.opacity(0.58))
+                        .lineLimit(2)
+                }
+            }
+
+            Divider()
+                .overlay(AppPalette.hairline)
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Current reference")
+                    .font(AppType.micro)
+                    .kerning(2.0)
+                    .textCase(.uppercase)
+                    .foregroundStyle(AppPalette.gold)
+                Text(selectedShot.gesture)
+                    .font(AppType.body)
+                    .foregroundStyle(AppPalette.ivory.opacity(0.70))
+                    .lineSpacing(3)
+            }
+
+            TagRow(tags: Array((portfolio.tags + selectedShot.tags).prefix(5)))
+        }
+        .padding(16)
+        .background(AppPalette.paperBright, in: RoundedRectangle(cornerRadius: AppChrome.radiusLarge, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: AppChrome.radiusLarge, style: .continuous)
+                .stroke(AppPalette.hairline, lineWidth: 1)
+        }
     }
 }
 
@@ -786,6 +864,7 @@ struct PortfolioStatPill: View {
 
 struct PortfolioMasonryGrid: View {
     let shots: [PortfolioShot]
+    @Binding var selectedShotIndex: Int
 
     private var indexedShots: [(offset: Int, element: PortfolioShot)] {
         Array(shots.enumerated())
@@ -806,21 +885,35 @@ struct PortfolioMasonryGrid: View {
             HStack(alignment: .top, spacing: 10) {
                 VStack(spacing: 10) {
                     ForEach(leftColumnShots, id: \.element.id) { item in
-                        PortfolioMasonryPhotoTile(
-                            shot: item.element,
-                            index: item.offset
-                        )
+                        Button {
+                            selectedShotIndex = item.offset
+                        } label: {
+                            PortfolioMasonryPhotoTile(
+                                shot: item.element,
+                                index: item.offset,
+                                isSelected: selectedShotIndex == item.offset
+                            )
+                        }
+                        .buttonStyle(.plain)
                         .frame(width: columnWidth, height: tileHeight(for: item.element, columnWidth: columnWidth))
+                        .accessibilityLabel("Choose reference shot \(item.element.title)")
                     }
                 }
 
                 VStack(spacing: 10) {
                     ForEach(rightColumnShots, id: \.element.id) { item in
-                        PortfolioMasonryPhotoTile(
-                            shot: item.element,
-                            index: item.offset
-                        )
+                        Button {
+                            selectedShotIndex = item.offset
+                        } label: {
+                            PortfolioMasonryPhotoTile(
+                                shot: item.element,
+                                index: item.offset,
+                                isSelected: selectedShotIndex == item.offset
+                            )
+                        }
+                        .buttonStyle(.plain)
                         .frame(width: columnWidth, height: tileHeight(for: item.element, columnWidth: columnWidth))
+                        .accessibilityLabel("Choose reference shot \(item.element.title)")
                     }
                 }
             }
@@ -870,21 +963,67 @@ struct PortfolioMasonryGrid: View {
 struct PortfolioMasonryPhotoTile: View {
     let shot: PortfolioShot
     let index: Int
+    let isSelected: Bool
 
     var body: some View {
         GeometryReader { proxy in
-            Image(shot.assetName)
-                .resizable()
-                .scaledToFit()
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .background(AppPalette.paperBright, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(AppPalette.hairline, lineWidth: 1)
+            ZStack(alignment: .bottomLeading) {
+                Image(shot.assetName)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .clipped()
+                    .overlay {
+                        LinearGradient(
+                            colors: [.clear, .black.opacity(0.02), .black.opacity(0.56)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Text(String(format: "%02d", index + 1))
+                            .font(AppType.micro)
+                            .kerning(1.4)
+                        if isSelected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 13, weight: .bold))
+                        }
+                    }
+                    .foregroundStyle(isSelected ? AppPalette.buttonText : AppPalette.paper)
+
+                    Text(shot.title)
+                        .font(.system(size: 16, weight: .semibold, design: .serif))
+                        .foregroundStyle(AppPalette.paper)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.78)
+
+                    Label(shot.location, systemImage: "mappin.and.ellipse")
+                        .font(.system(size: 10, weight: .semibold, design: .default))
+                        .foregroundStyle(AppPalette.paper.opacity(0.78))
+                        .lineLimit(1)
                 }
-                .shadow(color: .black.opacity(0.055), radius: 12, y: 6)
-                .accessibilityLabel("Portfolio photo \(index + 1), \(shot.title)")
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(AppPalette.paperBright, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(isSelected ? AppPalette.gold : AppPalette.hairline, lineWidth: isSelected ? 2.5 : 1)
+            }
+            .overlay(alignment: .topTrailing) {
+                if isSelected {
+                    Image(systemName: "camera.viewfinder")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(AppPalette.buttonText)
+                        .frame(width: 30, height: 30)
+                        .background(AppPalette.gold, in: Circle())
+                        .padding(8)
+                }
+            }
+            .shadow(color: .black.opacity(isSelected ? 0.11 : 0.055), radius: isSelected ? 16 : 12, y: isSelected ? 8 : 6)
         }
     }
 }
