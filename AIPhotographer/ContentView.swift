@@ -631,14 +631,7 @@ struct PortfolioListView: View {
         ScrollView(showsIndicators: true) {
             VStack(alignment: .leading, spacing: 22) {
                 HStack {
-                    Button(action: backAction) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 17, weight: .bold))
-                            .foregroundStyle(AppPalette.ivory)
-                            .frame(width: 46, height: 46)
-                            .background(AppPalette.paper, in: Circle())
-                            .shadow(color: .black.opacity(0.07), radius: 12, y: 5)
-                    }
+                    BloomingBackButton(action: backAction)
                     Spacer()
                 }
                 .padding(.top, 10)
@@ -677,7 +670,7 @@ struct PortfolioListView: View {
             .padding(.bottom, 52)
         }
         .scrollBounceBehavior(.always, axes: .vertical)
-        .background(AppPalette.ink.ignoresSafeArea())
+        .background(MemoryBackdrop())
     }
 
     private func avatarAsset(for index: Int) -> String {
@@ -704,14 +697,7 @@ struct PortfolioDetailView: View {
         ScrollView(showsIndicators: true) {
             VStack(alignment: .leading, spacing: 20) {
                 HStack {
-                    Button(action: backAction) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 17, weight: .bold))
-                            .foregroundStyle(AppPalette.ivory)
-                            .frame(width: 46, height: 46)
-                            .background(AppPalette.paper, in: Circle())
-                            .shadow(color: .black.opacity(0.07), radius: 12, y: 5)
-                    }
+                    BloomingBackButton(action: backAction)
                     Spacer()
                 }
                 .padding(.horizontal, 20)
@@ -746,7 +732,7 @@ struct PortfolioDetailView: View {
             .padding(.bottom, 34)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(AppPalette.ink.ignoresSafeArea())
+        .background(MemoryBackdrop())
     }
 }
 
@@ -3917,6 +3903,27 @@ struct BloomingWordmark: View {
     }
 }
 
+struct BloomingBackButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(AppPalette.ivory)
+                .frame(width: 46, height: 46)
+                .background(AppPalette.paper, in: Circle())
+                .overlay {
+                    Circle()
+                        .stroke(AppPalette.hairline, lineWidth: 1)
+                }
+                .shadow(color: AppPalette.oliveShadow, radius: 12, y: 5)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Back")
+    }
+}
+
 struct BloomingSprig: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
@@ -4268,6 +4275,7 @@ enum AppPalette {
     static let cameraPanel = Color(red: 0.982, green: 0.972, blue: 0.952).opacity(0.92)
     static let ivory = Color(red: 0.210, green: 0.216, blue: 0.195)
     static let gold = Color(red: 0.420, green: 0.462, blue: 0.320)
+    static let oliveShadow = Color(red: 0.420, green: 0.462, blue: 0.320).opacity(0.14)
     static let buttonText = Color(red: 0.992, green: 0.986, blue: 0.972)
     static let hairline = Color.black.opacity(0.10)
 }
