@@ -1,15 +1,42 @@
 import SwiftUI
+import UIKit
 
 enum AppStep {
-    case styleSelect
+    case welcome
+    case scenarioSelect
+    case portfolioList
+    case portfolioDetail
     case subjectCalibration
     case sceneChoice
     case scanSurroundings
     case currentScene
+    case sceneCalculating
     case liveCoach
-    case captureProcessing
     case preview
     case saved
+}
+
+enum AppTab {
+    case home
+    case invite
+    case profile
+}
+
+enum AppSheet: Identifiable {
+    case comments(CuratedPortfolio)
+    case bookmark(CuratedPortfolio)
+    case momentsSaved(Int)
+
+    var id: String {
+        switch self {
+        case .comments(let portfolio):
+            return "comments-\(portfolio.id)"
+        case .bookmark(let portfolio):
+            return "bookmark-\(portfolio.id)"
+        case .momentsSaved(let count):
+            return "moments-saved-\(count)"
+        }
+    }
 }
 
 enum SceneInputMethod: String {
@@ -22,6 +49,36 @@ struct PhotographyStyle {
     let title: String
     let author: String
     let assets: [String]
+    let tags: [String]
+}
+
+struct PhotoScenario: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let heroAsset: String
+    let tags: [String]
+    let portfolios: [CuratedPortfolio]
+}
+
+struct CuratedPortfolio: Identifiable {
+    let id: String
+    let title: String
+    let author: String
+    let photographerBio: String
+    let locationSummary: String
+    let styleSummary: String
+    let assets: [String]
+    let tags: [String]
+    let shots: [PortfolioShot]
+}
+
+struct PortfolioShot: Identifiable {
+    let id: String
+    let assetName: String
+    let title: String
+    let location: String
+    let gesture: String
     let tags: [String]
 }
 
@@ -54,23 +111,20 @@ struct CaptureSessionResult {
     let candidateAssets: [String]
 }
 
-struct KeeperSignal {
-    let styleId: String
-    let recipeAuthor: String
-    let sceneInputMethod: SceneInputMethod
-    let savedPhotoCount: Int
+struct SavedBloomingMoment: Identifiable {
+    let id = UUID()
+    let sceneTitle: String
+    let assetName: String
+    let isFineTuned: Bool
 }
 
 struct ContentView: View {
-    private let style = PhotographyStyle(
-        id: "campus_editorial_graduation",
-        title: "Campus Editorial Graduation",
-        author: "Ann Li",
-        assets: ["HooverTower", "ArchesWalk", "StripedLight"],
-        tags: ["landmark", "motion", "dramatic light"]
-    )
+    private let scenarios = AppContent.scenarios
 
-    @State private var step: AppStep = .styleSelect
+    @State private var step: AppStep = .welcome
+    @State private var selectedScenarioIndex = 0
+    @State private var selectedPortfolioIndex = 0
+    @State private var selectedShotIndex = 1
     @State private var subjectProfile: SubjectProfile?
     @State private var sceneInputMethod: SceneInputMethod = .scanSurroundings
     @State private var sceneCandidate = SceneCandidate(
@@ -79,64 +133,242 @@ struct ContentView: View {
         score: 91,
         assetName: "ArchesWalk"
     )
+    @State private var subjectReferenceImage: UIImage?
     @State private var isReadyToCapture = false
     @State private var selectedKeepers: Set<Int> = [0]
-    @State private var feedbackPositive: Bool?
+    @State private var fineTuneDecisions: [Int: Bool] = [:]
+    @State private var hasSavedFineTuneSelection = false
+    @State private var activeTab: AppTab = .home
+    @State private var activeSheet: AppSheet?
+    @State private var savedPortfolioIds: Set<String> = []
+    @State private var savedMoments: [SavedBloomingMoment] = []
 
-    private let captureResult = CaptureSessionResult(
-        finishingLook: "Editorial Warm Contrast",
-        candidateAssets: ["HooverTower", "ArchesWalk", "StripedLight"]
-    )
+    private var selectedScenario: PhotoScenario {
+        scenarios[min(selectedScenarioIndex, scenarios.count - 1)]
+    }
+
+    private var selectedPortfolio: CuratedPortfolio {
+        selectedScenario.portfolios[min(selectedPortfolioIndex, selectedScenario.portfolios.count - 1)]
+    }
+
+    private var selectedShot: PortfolioShot {
+        selectedPortfolio.shots[min(selectedShotIndex, selectedPortfolio.shots.count - 1)]
+    }
+
+    private var style: PhotographyStyle {
+        PhotographyStyle(
+            id: selectedPortfolio.id,
+            title: selectedPortfolio.title,
+            author: selectedPortfolio.author,
+            assets: selectedPortfolio.assets,
+            tags: selectedPortfolio.tags
+        )
+    }
+
+    private var captureResult: CaptureSessionResult {
+        CaptureSessionResult(
+            finishingLook: "AI Fine Tune",
+            candidateAssets: Array((selectedPortfolio.assets + selectedPortfolio.shots.map(\.assetName)).prefix(6))
+        )
+    }
+
+    private var allPortfolios: [CuratedPortfolio] {
+        var seen = Set<String>()
+        return scenarios
+            .flatMap(\.portfolios)
+            .filter { seen.insert($0.id).inserted }
+    }
+
+    private var savedPortfolios: [CuratedPortfolio] {
+        allPortfolios.filter { savedPortfolioIds.contains($0.id) }
+    }
+
+    private var showsBottomNavigation: Bool {
+        switch activeTab {
+        case .invite, .profile:
+            return true
+        case .home:
+            switch step {
+            case .welcome, .scenarioSelect, .liveCoach:
+                return false
+            default:
+                return true
+            }
+        }
+    }
 
     var body: some View {
         ZStack {
             MemoryBackdrop()
 
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .foregroundStyle(AppPalette.ivory)
-                .animation(.spring(response: 0.38, dampingFraction: 0.86), value: step)
+            VStack(spacing: 0) {
+                tabContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .foregroundStyle(AppPalette.ivory)
+                    .animation(.spring(response: 0.38, dampingFraction: 0.86), value: step)
+                    .animation(.spring(response: 0.34, dampingFraction: 0.88), value: activeTab)
+
+                if showsBottomNavigation {
+                    AppBottomNavigationBar(
+                        activeTab: $activeTab,
+                        avatarAsset: "HooverTower",
+                        homeAction: {
+                            activeTab = .home
+                            step = .welcome
+                        }
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
         }
         .preferredColorScheme(.light)
+        .statusBarHidden(step == .welcome)
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .comments(let portfolio):
+                CommentSheetView(portfolio: portfolio, avatarAsset: "HooverTower")
+                    .presentationDetents([.fraction(0.58), .large])
+                    .presentationDragIndicator(.visible)
+            case .bookmark(let portfolio):
+                BookmarkSheetView(
+                    portfolio: portfolio,
+                    saveAction: { savedPortfolioIds.insert($0.id) }
+                )
+                .presentationDetents([.fraction(0.48), .medium])
+                .presentationDragIndicator(.visible)
+            case .momentsSaved(let count):
+                MomentsSavedSheetView(
+                    savedCount: count,
+                    viewProfileAction: {
+                        activeSheet = nil
+                        resetCaptureState(clearSubject: true)
+                        activeTab = .profile
+                        step = .scenarioSelect
+                    },
+                    takeMoreAction: {
+                        activeSheet = nil
+                        resetCaptureState(clearSubject: false)
+                        activeTab = .home
+                        step = .sceneChoice
+                    }
+                )
+                .presentationDetents([.fraction(0.36), .medium])
+                .presentationDragIndicator(.visible)
+            }
+        }
+    }
+
+    private func resetCaptureState(clearSubject: Bool) {
+        selectedKeepers = []
+        fineTuneDecisions = [:]
+        hasSavedFineTuneSelection = false
+        isReadyToCapture = false
+        if clearSubject {
+            subjectProfile = nil
+            subjectReferenceImage = nil
+        }
+    }
+
+    @ViewBuilder
+    private var tabContent: some View {
+        switch activeTab {
+        case .home:
+            content
+        case .invite:
+            InviteView()
+        case .profile:
+            ProfileView(
+                savedPortfolios: savedPortfolios,
+                savedMoments: savedMoments,
+                avatarAsset: "HooverTower"
+            )
+        }
     }
 
     @ViewBuilder
     private var content: some View {
         switch step {
-        case .styleSelect:
-            StyleSelectView(style: style) {
-                step = .subjectCalibration
+        case .welcome:
+            WelcomeView {
+                step = .scenarioSelect
             }
+        case .scenarioSelect:
+            ScenarioSelectView(
+                scenarios: scenarios,
+                selectedScenarioIndex: $selectedScenarioIndex
+            ) {
+                selectedPortfolioIndex = 0
+                selectedShotIndex = 0
+                step = .portfolioList
+            }
+        case .portfolioList:
+            PortfolioListView(
+                scenario: selectedScenario,
+                selectedPortfolioIndex: $selectedPortfolioIndex,
+                openAction: { index in
+                    selectedPortfolioIndex = index
+                    selectedShotIndex = 0
+                    step = .portfolioDetail
+                },
+                commentAction: { portfolio in
+                    activeSheet = .comments(portfolio)
+                },
+                bookmarkAction: { portfolio in
+                    activeSheet = .bookmark(portfolio)
+                },
+                backAction: {
+                    step = .scenarioSelect
+                }
+            )
+        case .portfolioDetail:
+            PortfolioDetailView(
+                portfolio: selectedPortfolio,
+                continueAction: {
+                    sceneCandidate = SceneCandidate(
+                        title: selectedShot.location,
+                        reason: "Selected from \(selectedPortfolio.author)'s curated portfolio.",
+                        score: 88,
+                        assetName: selectedShot.assetName
+                    )
+                    step = .subjectCalibration
+                },
+                backAction: {
+                    step = .portfolioList
+                }
+            )
         case .subjectCalibration:
-            SubjectCalibrationView(profile: subjectProfile) {
+            SubjectCalibrationView(
+                referenceImage: $subjectReferenceImage,
+                profile: subjectProfile
+            ) {
                 subjectProfile = SubjectProfile(
                     count: 2,
-                    readinessNotes: ["faces found", "full body optional", "matching skin highlights"]
+                    readinessNotes: ["selfie uploaded", "faces visible", "ready for pose matching"]
                 )
             } continueAction: {
                 step = .sceneChoice
             } backAction: {
-                step = .styleSelect
+                step = .portfolioDetail
             }
         case .sceneChoice:
             SceneChoiceView(
                 scanAction: {
                     sceneInputMethod = .scanSurroundings
                     sceneCandidate = SceneCandidate(
-                        title: "South arcade, late side light",
+                        title: "Nearby campus pocket",
                         reason: "Clean background, side light, enough depth.",
                         score: 91,
-                        assetName: "ArchesWalk"
+                        assetName: selectedShot.assetName
                     )
                     step = .scanSurroundings
                 },
                 currentAction: {
                     sceneInputMethod = .currentScene
                     sceneCandidate = SceneCandidate(
-                        title: "Library wall, stripe light",
-                        reason: "Strong directional light with a quiet background.",
+                        title: selectedShot.location,
+                        reason: "Strong style match with the chosen reference shot.",
                         score: 84,
-                        assetName: "StripedLight"
+                        assetName: selectedShot.assetName
                     )
                     step = .currentScene
                 },
@@ -146,15 +378,20 @@ struct ContentView: View {
             )
         case .scanSurroundings:
             ScanSurroundingsView(candidate: sceneCandidate) {
-                step = .liveCoach
+                step = .sceneCalculating
             } backAction: {
                 step = .sceneChoice
             }
         case .currentScene:
             CurrentSceneView(candidate: sceneCandidate) {
-                step = .liveCoach
+                step = .sceneCalculating
             } backAction: {
                 step = .sceneChoice
+            }
+        case .sceneCalculating:
+            SceneCalculatingView(inputMethod: sceneInputMethod) {
+                isReadyToCapture = false
+                step = .liveCoach
             }
         case .liveCoach:
             LiveCoachingView(
@@ -164,49 +401,490 @@ struct ContentView: View {
                     isReadyToCapture = true
                 },
                 captureAction: {
-                    step = .captureProcessing
+                    selectedKeepers = Set(captureResult.candidateAssets.indices)
+                    fineTuneDecisions = [:]
+                    hasSavedFineTuneSelection = false
+                    step = .preview
                 },
                 backAction: {
                     isReadyToCapture = false
                     step = sceneInputMethod == .scanSurroundings ? .scanSurroundings : .currentScene
                 }
             )
-        case .captureProcessing:
-            CaptureProcessingView {
-                step = .preview
-            }
         case .preview:
             PreviewKeeperView(
                 result: captureResult,
                 selectedKeepers: $selectedKeepers,
                 saveAction: {
+                    fineTuneDecisions = [:]
+                    hasSavedFineTuneSelection = false
                     step = .saved
-                },
-                retakeAction: {
-                    isReadyToCapture = false
-                    step = .liveCoach
-                },
-                rescoutAction: {
-                    isReadyToCapture = false
-                    step = .sceneChoice
                 }
             )
         case .saved:
-            SavedFeedbackView(
-                signal: KeeperSignal(
-                    styleId: style.id,
-                    recipeAuthor: style.author,
-                    sceneInputMethod: sceneInputMethod,
-                    savedPhotoCount: selectedKeepers.count
-                ),
-                feedbackPositive: $feedbackPositive,
-                doneAction: {
-                    feedbackPositive = nil
-                    selectedKeepers = [0]
+            FineTuneReviewView(
+                result: captureResult,
+                selectedKeepers: selectedKeepers,
+                fineTuneDecisions: $fineTuneDecisions,
+                isSaved: hasSavedFineTuneSelection,
+                saveAction: {
+                    guard !hasSavedFineTuneSelection else { return }
+                    let savedSelection = selectedKeepers.sorted().compactMap { index -> SavedBloomingMoment? in
+                        guard captureResult.candidateAssets.indices.contains(index) else { return nil }
+                        return SavedBloomingMoment(
+                            sceneTitle: selectedScenario.title,
+                            assetName: captureResult.candidateAssets[index],
+                            isFineTuned: fineTuneDecisions[index] ?? false
+                        )
+                    }
+                    savedMoments = Array((savedSelection + savedMoments).prefix(30))
+                    hasSavedFineTuneSelection = true
                     isReadyToCapture = false
-                    step = .styleSelect
+                    activeSheet = .momentsSaved(savedSelection.count)
                 }
             )
+        }
+    }
+}
+
+struct AppContent {
+    static let graduationPortfolio = CuratedPortfolio(
+        id: "campus_editorial_graduation",
+        title: "Campus Editorial Graduation",
+        author: "Ann Li",
+        photographerBio: "Ann builds campus stories around landmark scale, soft movement, and graphic pockets of light. Her graduation work feels editorial without losing the warmth of the people in the frame.",
+        locationSummary: "Hoover Tower, sandstone arches, warm indoor light",
+        styleSummary: "Landmark scale, motion blur, dramatic striped light",
+        assets: ["HooverTower", "ArchesWalk", "StripedLight"],
+        tags: ["landmark", "motion", "dramatic light"],
+        shots: [
+            PortfolioShot(
+                id: "tower-scale",
+                assetName: "HooverTower",
+                title: "Tiny Beneath The Tower",
+                location: "Hoover Tower lawn",
+                gesture: "Sit low in the foreground, lean in, let the landmark dominate.",
+                tags: ["scale", "landmark", "soft grass"]
+            ),
+            PortfolioShot(
+                id: "arcade-motion",
+                assetName: "ArchesWalk",
+                title: "Walkaway Through Arches",
+                location: "Main Quad arcade",
+                gesture: "Hold hands and walk away slowly as the camera follows behind.",
+                tags: ["motion", "arches", "gold light"]
+            ),
+            PortfolioShot(
+                id: "striped-light",
+                assetName: "StripedLight",
+                title: "Striped Light Conversation",
+                location: "Warm interior with louver light",
+                gesture: "Stand inside the light, face each other, laugh mid-conversation.",
+                tags: ["light pattern", "warm", "intimate"]
+            )
+        ]
+    )
+
+    static let softPortraitPortfolio = CuratedPortfolio(
+        id: "soft_campus_portrait",
+        title: "Soft Campus Portraits",
+        author: "Maya Chen",
+        photographerBio: "Maya focuses on calm portrait direction, clean backgrounds, and gentle expression. Her sets are tuned for people who want a flattering, natural image language.",
+        locationSummary: "Open lawn, tower edges, shaded paths",
+        styleSummary: "Clean portraits, soft greens, calm expressions",
+        assets: ["HooverTower", "StripedLight", "ArchesWalk"],
+        tags: ["portrait", "soft light", "clean"],
+        shots: [
+            PortfolioShot(id: "portrait-lawn", assetName: "HooverTower", title: "Lawn Portrait", location: "Open campus lawn", gesture: "Stand tall, angle shoulders, look slightly past camera.", tags: ["portrait", "green", "classic"]),
+            PortfolioShot(id: "portrait-light", assetName: "StripedLight", title: "Window Glow", location: "Quiet window light", gesture: "Turn chin toward light, hands relaxed.", tags: ["soft", "window", "solo"]),
+            PortfolioShot(id: "portrait-arches", assetName: "ArchesWalk", title: "Framed Walk", location: "Shaded arch path", gesture: "Walk toward camera with a small smile.", tags: ["walking", "frame", "simple"])
+        ]
+    )
+
+    static let cinematicCampusPortfolio = CuratedPortfolio(
+        id: "cinematic_campus_story",
+        title: "Cinematic Campus Story",
+        author: "Leo Park",
+        photographerBio: "Leo treats the campus like a film location, looking for depth, backlight, and quiet movement. His portfolio favors wide frames with a sense of story.",
+        locationSummary: "Long corridors, backlight, layered architecture",
+        styleSummary: "Wide frames, shadow depth, story-first movement",
+        assets: ["ArchesWalk", "HooverTower", "StripedLight"],
+        tags: ["cinematic", "wide", "story"],
+        shots: [
+            PortfolioShot(id: "cinema-arches", assetName: "ArchesWalk", title: "Long Arcade", location: "Deep arch corridor", gesture: "Walk slowly, do not look back.", tags: ["wide", "motion", "depth"]),
+            PortfolioShot(id: "cinema-tower", assetName: "HooverTower", title: "Campus Scale", location: "Landmark view", gesture: "Stay small in frame, interact naturally.", tags: ["scale", "campus", "quiet"]),
+            PortfolioShot(id: "cinema-light", assetName: "StripedLight", title: "Light Scene", location: "Graphic light wall", gesture: "Step into the brightest stripe and pause.", tags: ["shadow", "graphic", "warm"])
+        ]
+    )
+
+    static let scenarios: [PhotoScenario] = [
+        PhotoScenario(
+            id: "graduation",
+            title: "Graduation",
+            subtitle: "Campus memories, cap-and-gown portraits, friend groups, and landmark shots.",
+            heroAsset: "GraduationScenePoster",
+            tags: ["campus", "milestone", "editorial"],
+            portfolios: [graduationPortfolio, softPortraitPortfolio, cinematicCampusPortfolio]
+        ),
+        PhotoScenario(
+            id: "wedding",
+            title: "Wedding",
+            subtitle: "Warm portraits, movement, rings, quiet architecture, and celebration moments.",
+            heroAsset: "WeddingScenePoster",
+            tags: ["romantic", "warm", "candid"],
+            portfolios: [softPortraitPortfolio, graduationPortfolio, cinematicCampusPortfolio]
+        ),
+        PhotoScenario(
+            id: "anniversary",
+            title: "Anniversary",
+            subtitle: "Couple-led stories with intimate gestures, soft light, and place-based memories.",
+            heroAsset: "AnniversaryScenePoster",
+            tags: ["couple", "memory", "soft"],
+            portfolios: [cinematicCampusPortfolio, graduationPortfolio, softPortraitPortfolio]
+        )
+    ]
+}
+
+struct WelcomeView: View {
+    let startAction: () -> Void
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                Image("WelcomePageArtwork")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .clipped()
+
+                Button(action: startAction) {
+                    Color.clear
+                        .frame(width: proxy.size.width * 0.80, height: proxy.size.height * 0.075)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Start Blooming")
+                .position(x: proxy.size.width * 0.50, y: proxy.size.height * 0.865)
+            }
+        }
+        .ignoresSafeArea()
+    }
+}
+
+struct ScenarioSelectView: View {
+    let scenarios: [PhotoScenario]
+    @Binding var selectedScenarioIndex: Int
+    let continueAction: () -> Void
+
+    var body: some View {
+        ScrollView(showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
+                    BloomingWordmark()
+
+                    Text("What’s blooming now?")
+                        .font(AppType.homeHero)
+                        .foregroundStyle(AppPalette.ivory)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                    Text("Select your themed scene")
+                        .font(AppType.micro)
+                        .kerning(4.0)
+                        .textCase(.uppercase)
+                        .foregroundStyle(AppPalette.ivory.opacity(0.58))
+                }
+                .padding(.top, 10)
+                .padding(.horizontal, 18)
+
+                VStack(spacing: 12) {
+                    ForEach(Array(scenarios.enumerated()), id: \.element.id) { index, scenario in
+                        ScenarioCard(
+                            scenario: scenario,
+                            isSelected: selectedScenarioIndex == index
+                        ) {
+                            selectedScenarioIndex = index
+                            continueAction()
+                        }
+                    }
+                }
+                .padding(.top, 4)
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollBounceBehavior(.always, axes: .vertical)
+        .background(BloomingHomeBackdrop().ignoresSafeArea())
+    }
+}
+
+struct PortfolioListView: View {
+    let scenario: PhotoScenario
+    @Binding var selectedPortfolioIndex: Int
+    let openAction: (Int) -> Void
+    let commentAction: (CuratedPortfolio) -> Void
+    let bookmarkAction: (CuratedPortfolio) -> Void
+    let backAction: () -> Void
+
+    var body: some View {
+        ScrollView(showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 22) {
+                HStack {
+                    Button(action: backAction) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(AppPalette.ivory)
+                            .frame(width: 46, height: 46)
+                            .background(AppPalette.paper, in: Circle())
+                            .shadow(color: .black.opacity(0.07), radius: 12, y: 5)
+                    }
+                    Spacer()
+                }
+                .padding(.top, 10)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(scenario.title)
+                        .font(AppType.hero)
+                        .foregroundStyle(AppPalette.ivory)
+                    Text("Choose a photographer whose eye matches the moment.")
+                        .font(AppType.body)
+                        .foregroundStyle(AppPalette.ivory.opacity(0.66))
+                        .lineSpacing(3)
+                }
+
+                LazyVStack(spacing: 14) {
+                    ForEach(Array(scenario.portfolios.enumerated()), id: \.element.id) { index, portfolio in
+                        PhotographerPortfolioCard(
+                            portfolio: portfolio,
+                            avatarAsset: avatarAsset(for: index),
+                            likeCount: likeCount(for: index),
+                            isSelected: selectedPortfolioIndex == index,
+                            commentAction: {
+                                commentAction(portfolio)
+                            },
+                            bookmarkAction: {
+                                bookmarkAction(portfolio)
+                            }
+                        ) {
+                            selectedPortfolioIndex = index
+                            openAction(index)
+                        }
+                    }
+                }
+            }
+            .padding(20)
+            .padding(.bottom, 52)
+        }
+        .scrollBounceBehavior(.always, axes: .vertical)
+        .background(AppPalette.ink.ignoresSafeArea())
+    }
+
+    private func avatarAsset(for index: Int) -> String {
+        let avatars = ["StripedLight", "HooverTower", "ArchesWalk"]
+        return avatars[index % avatars.count]
+    }
+
+    private func likeCount(for index: Int) -> Int {
+        [64, 42, 87][index % 3]
+    }
+}
+
+struct PortfolioDetailView: View {
+    let portfolio: CuratedPortfolio
+    let continueAction: () -> Void
+    let backAction: () -> Void
+
+    var body: some View {
+        ScrollView(showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 22) {
+                HStack {
+                    Button(action: backAction) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(AppPalette.ivory)
+                            .frame(width: 46, height: 46)
+                            .background(AppPalette.paper, in: Circle())
+                            .shadow(color: .black.opacity(0.07), radius: 12, y: 5)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 30)
+
+                PhotographerProfileHeader(portfolio: portfolio)
+                    .padding(.horizontal, 20)
+
+                PortfolioMasonryGrid(shots: portfolio.shots)
+                    .padding(.horizontal, 12)
+
+                PrimaryButton(title: "Choose This Curated Portfolio", icon: "camera.viewfinder", action: continueAction)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 2)
+            }
+            .padding(.bottom, 34)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(AppPalette.ink.ignoresSafeArea())
+    }
+}
+
+struct PhotographerProfileHeader: View {
+    let portfolio: CuratedPortfolio
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                PhotographerAvatar(assetName: portfolio.assets.first ?? "HooverTower", name: portfolio.author)
+                    .frame(width: 56, height: 56)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(portfolio.author)
+                        .font(AppType.screenTitle)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                }
+            }
+
+            Text(portfolio.photographerBio)
+                .font(AppType.body)
+                .foregroundStyle(AppPalette.ivory.opacity(0.72))
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct PortfolioStatPill: View {
+    let icon: String
+    let value: String
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(AppPalette.gold)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value)
+                    .font(AppType.chip)
+                    .lineLimit(1)
+                Text(label.uppercased())
+                    .font(.system(size: 8, weight: .bold))
+                    .kerning(1.2)
+                    .foregroundStyle(AppPalette.ivory.opacity(0.46))
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppPalette.graphite.opacity(0.60), in: RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous))
+    }
+}
+
+struct PortfolioMasonryGrid: View {
+    let shots: [PortfolioShot]
+
+    private var indexedShots: [(offset: Int, element: PortfolioShot)] {
+        Array(shots.enumerated())
+    }
+
+    private var leftColumnShots: [(offset: Int, element: PortfolioShot)] {
+        indexedShots.filter { $0.offset % 4 == 0 || $0.offset % 4 == 3 }
+    }
+
+    private var rightColumnShots: [(offset: Int, element: PortfolioShot)] {
+        indexedShots.filter { $0.offset % 4 == 1 || $0.offset % 4 == 2 }
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let columnWidth = (proxy.size.width - 10) / 2
+
+            HStack(alignment: .top, spacing: 10) {
+                VStack(spacing: 10) {
+                    ForEach(leftColumnShots, id: \.element.id) { item in
+                        PortfolioMasonryPhotoTile(
+                            shot: item.element,
+                            index: item.offset
+                        )
+                        .frame(width: columnWidth, height: tileHeight(for: item.element, columnWidth: columnWidth))
+                    }
+                }
+
+                VStack(spacing: 10) {
+                    ForEach(rightColumnShots, id: \.element.id) { item in
+                        PortfolioMasonryPhotoTile(
+                            shot: item.element,
+                            index: item.offset
+                        )
+                        .frame(width: columnWidth, height: tileHeight(for: item.element, columnWidth: columnWidth))
+                    }
+                }
+            }
+            .frame(width: proxy.size.width, alignment: .top)
+        }
+        .frame(height: gridHeight(forColumnWidth: referenceColumnWidth))
+    }
+
+    private var referenceColumnWidth: CGFloat {
+        max(120, (UIScreen.main.bounds.width - 24 - 10) / 2)
+    }
+
+    private func tileHeight(for shot: PortfolioShot, columnWidth: CGFloat) -> CGFloat {
+        let aspectRatio = imageAspectRatio(for: shot.assetName)
+        return columnWidth / max(aspectRatio, 0.1)
+    }
+
+    private func gridHeight(forColumnWidth columnWidth: CGFloat) -> CGFloat {
+        max(
+            columnHeight(for: leftColumnShots, columnWidth: columnWidth),
+            columnHeight(for: rightColumnShots, columnWidth: columnWidth)
+        )
+    }
+
+    private func columnHeight(for items: [(offset: Int, element: PortfolioShot)], columnWidth: CGFloat) -> CGFloat {
+        guard !items.isEmpty else { return 0 }
+        let imageHeight = items.reduce(CGFloat.zero) { partial, item in
+            partial + tileHeight(for: item.element, columnWidth: columnWidth)
+        }
+        return imageHeight + CGFloat(items.count - 1) * 10
+    }
+
+    private func imageAspectRatio(for assetName: String) -> CGFloat {
+        if let image = UIImage(named: assetName), image.size.height > 0 {
+            return image.size.width / image.size.height
+        }
+
+        switch assetName {
+        case "ArchesWalk":
+            return 1.5
+        default:
+            return 2.0 / 3.0
+        }
+    }
+}
+
+struct PortfolioMasonryPhotoTile: View {
+    let shot: PortfolioShot
+    let index: Int
+
+    var body: some View {
+        GeometryReader { proxy in
+            Image(shot.assetName)
+                .resizable()
+                .scaledToFit()
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .background(AppPalette.paperBright, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(AppPalette.hairline, lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(0.055), radius: 12, y: 6)
+                .accessibilityLabel("Portfolio photo \(index + 1), \(shot.title)")
         }
     }
 }
@@ -399,102 +1077,655 @@ struct InstagramReferenceCard: View {
     }
 }
 
+struct ScenarioCard: View {
+    let scenario: PhotoScenario
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(scenario.heroAsset)
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity)
+                .aspectRatio(scenePosterAspectRatio, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 26, style: .continuous)
+                        .stroke(Color.white.opacity(0.78), lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(0.11), radius: 18, y: 10)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open \(scenario.title) themed scene")
+    }
+
+    private var scenePosterAspectRatio: CGFloat {
+        switch scenario.id {
+        case "graduation":
+            return 781.0 / 448.0
+        case "wedding":
+            return 779.0 / 415.0
+        case "anniversary":
+            return 779.0 / 411.0
+        default:
+            return 1.78
+        }
+    }
+}
+
+struct ThemedSceneIllustration: View {
+    let kind: String
+
+    private var accent: Color {
+        switch kind {
+        case "wedding":
+            return Color(red: 0.710, green: 0.600, blue: 0.520)
+        case "anniversary":
+            return AppPalette.gold
+        default:
+            return AppPalette.mistBlue
+        }
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = proxy.size.height
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(AppPalette.paper.opacity(kind == "anniversary" ? 0.10 : 0.72))
+                    .frame(width: width * 0.78, height: height * 0.82)
+                    .offset(x: width * 0.05, y: height * 0.04)
+
+                Circle()
+                    .fill(accent.opacity(kind == "wedding" ? 0.22 : 0.28))
+                    .frame(width: width * 0.48, height: width * 0.48)
+                    .position(x: width * 0.70, y: height * 0.22)
+
+                RoundedRectangle(cornerRadius: 26, style: .continuous)
+                    .fill(AppPalette.paper.opacity(kind == "anniversary" ? 0.92 : 0.96))
+                    .frame(width: width * 0.58, height: height * 0.72)
+                    .position(x: width * 0.45, y: height * 0.52)
+                    .shadow(color: .black.opacity(0.07), radius: 18, y: 8)
+
+                sceneMotif(width: width, height: height)
+
+                HStack(spacing: 6) {
+                    Capsule()
+                        .fill(kind == "anniversary" ? AppPalette.paper.opacity(0.72) : AppPalette.gold.opacity(0.78))
+                        .frame(width: width * 0.30, height: 5)
+                    Capsule()
+                        .fill(accent.opacity(0.48))
+                        .frame(width: width * 0.18, height: 5)
+                }
+                .position(x: width * 0.46, y: height * 0.84)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sceneMotif(width: CGFloat, height: CGFloat) -> some View {
+        switch kind {
+        case "wedding":
+            ZStack {
+                Circle()
+                    .stroke(AppPalette.gold, lineWidth: 2.2)
+                    .frame(width: width * 0.22, height: width * 0.22)
+                    .position(x: width * 0.39, y: height * 0.47)
+                Circle()
+                    .stroke(accent.opacity(0.88), lineWidth: 2.2)
+                    .frame(width: width * 0.22, height: width * 0.22)
+                    .position(x: width * 0.51, y: height * 0.47)
+                Path { path in
+                    path.move(to: CGPoint(x: width * 0.30, y: height * 0.62))
+                    path.addCurve(
+                        to: CGPoint(x: width * 0.62, y: height * 0.61),
+                        control1: CGPoint(x: width * 0.42, y: height * 0.70),
+                        control2: CGPoint(x: width * 0.52, y: height * 0.54)
+                    )
+                }
+                .stroke(AppPalette.gold.opacity(0.62), lineWidth: 1.6)
+            }
+        case "anniversary":
+            ZStack {
+                ForEach(0..<4, id: \.self) { index in
+                    Capsule()
+                        .fill(AppPalette.gold.opacity(0.82))
+                        .frame(width: 8, height: width * 0.32)
+                        .rotationEffect(.degrees(Double(index) * 45))
+                        .position(x: width * 0.44, y: height * 0.50)
+                }
+                Circle()
+                    .fill(AppPalette.paper.opacity(0.95))
+                    .frame(width: width * 0.08, height: width * 0.08)
+                    .position(x: width * 0.44, y: height * 0.50)
+            }
+        default:
+            ZStack {
+                Path { path in
+                    path.move(to: CGPoint(x: width * 0.25, y: height * 0.44))
+                    path.addLine(to: CGPoint(x: width * 0.45, y: height * 0.32))
+                    path.addLine(to: CGPoint(x: width * 0.66, y: height * 0.44))
+                    path.addLine(to: CGPoint(x: width * 0.45, y: height * 0.56))
+                    path.closeSubpath()
+                }
+                .stroke(AppPalette.gold, lineWidth: 2.3)
+
+                Path { path in
+                    path.move(to: CGPoint(x: width * 0.33, y: height * 0.49))
+                    path.addLine(to: CGPoint(x: width * 0.33, y: height * 0.62))
+                    path.addCurve(
+                        to: CGPoint(x: width * 0.57, y: height * 0.62),
+                        control1: CGPoint(x: width * 0.39, y: height * 0.70),
+                        control2: CGPoint(x: width * 0.51, y: height * 0.70)
+                    )
+                    path.addLine(to: CGPoint(x: width * 0.57, y: height * 0.49))
+                }
+                .stroke(AppPalette.gold.opacity(0.88), lineWidth: 2.0)
+
+                Path { path in
+                    path.move(to: CGPoint(x: width * 0.66, y: height * 0.44))
+                    path.addLine(to: CGPoint(x: width * 0.66, y: height * 0.64))
+                    path.addLine(to: CGPoint(x: width * 0.70, y: height * 0.69))
+                }
+                .stroke(AppPalette.gold, lineWidth: 1.8)
+            }
+        }
+    }
+}
+
+struct PortfolioCard: View {
+    let portfolio: CuratedPortfolio
+    let isSelected: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(portfolio.title)
+                        .font(AppType.cardTitle)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.86)
+                    Text("by \(portfolio.author)")
+                        .font(AppType.caption)
+                        .foregroundStyle(AppPalette.gold)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(AppPalette.gold)
+            }
+
+            PortfolioMiniStrip(assets: portfolio.assets)
+                .frame(height: 132)
+
+            Text(portfolio.styleSummary)
+                .font(AppType.body)
+                .foregroundStyle(AppPalette.ivory.opacity(0.68))
+                .lineSpacing(3)
+
+            HStack(spacing: 8) {
+                Label(portfolio.locationSummary, systemImage: "mappin.and.ellipse")
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text("\(portfolio.shots.count) shots")
+            }
+            .font(AppType.chip)
+            .foregroundStyle(AppPalette.ivory.opacity(0.58))
+
+            TagRow(tags: portfolio.tags)
+        }
+        .padding(16)
+        .surfaceCard()
+        .overlay {
+            RoundedRectangle(cornerRadius: AppChrome.radius, style: .continuous)
+                .strokeBorder(isSelected ? AppPalette.gold : .clear, lineWidth: 2)
+        }
+    }
+}
+
+struct PhotographerPortfolioCard: View {
+    let portfolio: CuratedPortfolio
+    let avatarAsset: String
+    let likeCount: Int
+    let isSelected: Bool
+    let commentAction: () -> Void
+    let bookmarkAction: () -> Void
+    let openAction: () -> Void
+
+    @State private var isLiked = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Button(action: openAction) {
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack(spacing: 10) {
+                        PhotographerAvatar(assetName: avatarAsset, name: portfolio.author)
+                            .frame(width: 36, height: 36)
+
+                        Text(portfolio.author)
+                            .font(.system(size: 16, weight: .bold, design: .default))
+                            .foregroundStyle(AppPalette.ivory)
+
+                        Spacer()
+
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(AppPalette.ivory.opacity(0.42))
+                    }
+
+                    PortfolioPhotoCarousel(assets: carouselAssets)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open \(portfolio.author)'s portfolio")
+
+            HStack(spacing: 22) {
+                PortfolioActionButton(
+                    icon: isLiked ? "heart.fill" : "heart",
+                    value: "\(isLiked ? likeCount + 1 : likeCount)",
+                    accessibilityLabel: "Like \(portfolio.author)'s portfolio"
+                ) {
+                    isLiked.toggle()
+                }
+                PortfolioActionButton(
+                    icon: "bubble.right",
+                    value: nil,
+                    accessibilityLabel: "Comment on \(portfolio.author)'s portfolio",
+                    action: commentAction
+                )
+                Spacer()
+                PortfolioActionButton(
+                    icon: "bookmark",
+                    value: nil,
+                    accessibilityLabel: "Bookmark \(portfolio.author)'s portfolio",
+                    action: bookmarkAction
+                )
+            }
+            .padding(.top, 2)
+        }
+        .padding(10)
+        .background(AppPalette.paperBright, in: RoundedRectangle(cornerRadius: AppChrome.radiusLarge, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: AppChrome.radiusLarge, style: .continuous)
+                .stroke(isSelected ? AppPalette.gold.opacity(0.5) : AppPalette.hairline, lineWidth: isSelected ? 1.5 : 1)
+        }
+        .shadow(color: .black.opacity(0.045), radius: 12, y: 6)
+    }
+
+    private var carouselAssets: [String] {
+        Array((portfolio.assets + portfolio.shots.map(\.assetName)).prefix(6))
+    }
+}
+
+struct PhotographerAvatar: View {
+    let assetName: String
+    let name: String
+
+    var body: some View {
+        GeometryReader { proxy in
+            Image(assetName)
+                .resizable()
+                .scaledToFill()
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .clipShape(Circle())
+                .overlay {
+                    Circle()
+                        .stroke(AppPalette.paperBright, lineWidth: 1.5)
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    Text(initials)
+                        .font(.system(size: max(7, proxy.size.width * 0.19), weight: .heavy))
+                        .foregroundStyle(AppPalette.buttonText)
+                        .frame(width: proxy.size.width * 0.38, height: proxy.size.width * 0.38)
+                        .background(AppPalette.gold, in: Circle())
+                }
+        }
+        .shadow(color: .black.opacity(0.08), radius: 5, y: 2)
+    }
+    private var initials: String {
+        name
+            .split(separator: " ")
+            .prefix(2)
+            .compactMap { $0.first }
+            .map(String.init)
+            .joined()
+    }
+}
+
+struct PortfolioPhotoCarousel: View {
+    let assets: [String]
+    @State private var visiblePhotoIndex: Int? = 0
+
+    var body: some View {
+        VStack(spacing: 7) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(assets.enumerated()), id: \.offset) { index, asset in
+                        Image(asset)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 96, height: 116)
+                            .clipShape(RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous)
+                                    .stroke(AppPalette.hairline, lineWidth: 1)
+                            }
+                            .id(index)
+                    }
+                }
+                .scrollTargetLayout()
+                .padding(.trailing, 4)
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .scrollPosition(id: $visiblePhotoIndex)
+
+            CarouselDots(count: min(assets.count, 6), activeIndex: visiblePhotoIndex ?? 0)
+        }
+    }
+}
+
+struct CarouselDots: View {
+    let count: Int
+    let activeIndex: Int
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<count, id: \.self) { index in
+                Circle()
+                    .fill(index == activeIndex ? AppPalette.ivory.opacity(0.72) : AppPalette.ivory.opacity(0.20))
+                    .frame(width: index == activeIndex ? 6 : 5, height: index == activeIndex ? 6 : 5)
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(AppPalette.ink.opacity(0.06), in: Capsule())
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+}
+
+struct PortfolioActionButton: View {
+    let icon: String
+    let value: String?
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .medium))
+                if let value {
+                    Text(value)
+                        .font(.system(size: 14, weight: .medium))
+                }
+            }
+            .foregroundStyle(AppPalette.ivory.opacity(0.88))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+    }
+}
+
+struct PortfolioMiniStrip: View {
+    let assets: [String]
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = (proxy.size.width - 16) / 3
+            HStack(spacing: 8) {
+                ForEach(Array(assets.enumerated()), id: \.offset) { index, asset in
+                    Image(asset)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: width, height: index == 1 ? 132 : 112)
+                        .clipShape(RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous)
+                                .stroke(AppPalette.paper.opacity(0.55), lineWidth: 1)
+                        }
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .center)
+        }
+    }
+}
+
+struct ShotReferenceRow: View {
+    let shot: PortfolioShot
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(shot.assetName)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 92, height: 118)
+                    .clipShape(RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text(shot.title)
+                            .font(.system(size: 18, weight: .regular, design: .serif))
+                            .lineLimit(2)
+                        Spacer()
+                        if isSelected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(AppPalette.gold)
+                        }
+                    }
+                    Label(shot.location, systemImage: "mappin.and.ellipse")
+                        .font(AppType.chip)
+                        .foregroundStyle(AppPalette.ivory.opacity(0.58))
+                        .lineLimit(1)
+                    Text(shot.gesture)
+                        .font(AppType.caption)
+                        .foregroundStyle(AppPalette.ivory.opacity(0.68))
+                        .lineLimit(3)
+                    TagRow(tags: shot.tags)
+                }
+            }
+            .padding(12)
+            .surfaceCard(cornerRadius: AppChrome.radiusSmall)
+            .overlay {
+                RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous)
+                    .strokeBorder(isSelected ? AppPalette.gold : .clear, lineWidth: 2)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Select \(shot.title)")
+    }
+}
+
 struct SubjectCalibrationView: View {
+    @Binding var referenceImage: UIImage?
+
     let profile: SubjectProfile?
     let captureAction: () -> Void
     let continueAction: () -> Void
     let backAction: () -> Void
 
+    @State private var isShowingCamera = false
+
     var body: some View {
         ScreenScaffold(
-            title: "Subject reference",
-            subtitle: "Capture everyone once so the app can judge scale, pose readiness, and faces during the shoot.",
+            title: "Who will be in the photo?",
+            subtitle: "Upload one selfie or group selfie so the app knows who to guide. You will confirm it before moving on.",
             backAction: backAction
         ) {
-            VStack(spacing: 18) {
-                Button(action: captureAction) {
-                    ZStack(alignment: .topTrailing) {
+            VStack(spacing: 14) {
+                Button {
+                    openCameraOrDemo()
+                } label: {
+                    ZStack {
                         RoundedRectangle(cornerRadius: AppChrome.radiusLarge, style: .continuous)
                             .fill(AppPalette.mistBlue.opacity(0.52))
                             .overlay {
                                 RoundedRectangle(cornerRadius: AppChrome.radiusLarge, style: .continuous)
                                     .stroke(AppPalette.hairline, lineWidth: 1)
                             }
-                        VStack(spacing: 18) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: AppChrome.radius, style: .continuous)
-                                    .fill(AppPalette.paper)
-                                    .frame(width: 132, height: 162)
-                                    .shadow(color: .black.opacity(0.08), radius: 16, y: 8)
-                                VStack(spacing: 12) {
-                                    HStack(spacing: 5) {
-                                        Circle()
-                                            .stroke(AppPalette.ivory.opacity(0.36), lineWidth: 1)
-                                            .frame(width: 11, height: 11)
-                                        RoundedRectangle(cornerRadius: 2)
-                                            .fill(AppPalette.ivory.opacity(0.12))
-                                            .frame(width: 48, height: 4)
-                                        Spacer()
-                                    }
-                                    .padding(.horizontal, 14)
 
-                                    Image(systemName: profile == nil ? "person.crop.rectangle.stack" : "checkmark.seal.fill")
-                                        .font(.system(size: 42, weight: .semibold))
-                                        .foregroundStyle(profile == nil ? AppPalette.ivory.opacity(0.50) : AppPalette.gold)
-
-                                    Text(profile == nil ? "REFERENCE" : "READY")
-                                        .font(AppType.micro)
-                                        .kerning(2.4)
-                                        .foregroundStyle(AppPalette.gold)
+                        if let referenceImage {
+                            Image(uiImage: referenceImage)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 232, height: 300)
+                                .clipShape(RoundedRectangle(cornerRadius: AppChrome.radius, style: .continuous))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: AppChrome.radius, style: .continuous)
+                                        .stroke(AppPalette.paperBright, lineWidth: 2)
                                 }
-                                .frame(width: 132, height: 162)
+                                .shadow(color: .black.opacity(0.08), radius: 16, y: 8)
+                        } else {
+                            RoundedRectangle(cornerRadius: AppChrome.radius, style: .continuous)
+                                .fill(AppPalette.paperBright)
+                                .frame(width: 232, height: 300)
+                                .shadow(color: .black.opacity(0.08), radius: 16, y: 8)
+
+                            VStack(spacing: 18) {
+                                Image(systemName: "camera.viewfinder")
+                                    .font(.system(size: 52, weight: .medium))
+                                    .foregroundStyle(AppPalette.gold)
+
+                                Text("SELFIE")
+                                    .font(AppType.micro)
+                                    .kerning(2.4)
+                                    .foregroundStyle(AppPalette.ivory.opacity(0.56))
                             }
-                            Text(profile == nil ? "Add subject reference" : "Subjects detected")
-                                .font(AppType.sectionTitle)
-                            Text(profile == nil ? "The app uses this to judge pose readiness and composition scale during the shoot." : "Two people are ready for framing, light, and pose cues.")
-                                .font(AppType.body)
-                                .foregroundStyle(AppPalette.ivory.opacity(0.68))
-                                .multilineTextAlignment(.center)
-                                .lineSpacing(3)
-                                .padding(.horizontal)
-                            Label(profile == nil ? "Capture Subject Photo" : "Retake Reference", systemImage: "camera.fill")
-                                .frame(maxWidth: .infinity)
-                                .buttonStyleLabel()
                         }
-                        .padding(24)
+                    }
+                    .overlay(alignment: .bottom) {
+                        if referenceImage != nil {
+                            Text("Tap photo to retake")
+                                .font(AppType.caption)
+                                .foregroundStyle(AppPalette.ivory.opacity(0.62))
+                                .padding(.bottom, 18)
+                        }
                     }
                 }
                 .buttonStyle(.plain)
-                .frame(height: 360)
-                .accessibilityLabel(profile == nil ? "Capture subject reference" : "Retake subject reference")
-
-                if let profile {
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack {
-                            Label("\(profile.count) subjects", systemImage: "person.2.fill")
-                            Spacer()
-                            Text("READY")
-                                .font(.system(size: 11, weight: .heavy))
-                                .foregroundStyle(AppPalette.gold)
-                        }
-                        .font(.system(size: 14, weight: .semibold))
-
-                        WrapChips(items: profile.readinessNotes)
-                    }
-                    .padding(16)
-                    .background(AppPalette.graphite, in: RoundedRectangle(cornerRadius: AppChrome.radius, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: AppChrome.radius, style: .continuous)
-                            .stroke(AppPalette.hairline, lineWidth: 1)
-                    }
-                }
+                .frame(height: 386)
+                .accessibilityLabel(referenceImage == nil ? "Upload a selfie" : "Retake selfie")
             }
         } footer: {
             PrimaryButton(
-                title: profile == nil ? "Capture Subject Photo" : "Choose Scene",
-                icon: profile == nil ? "camera.fill" : "arrow.right",
-                action: profile == nil ? captureAction : continueAction
+                title: "Confirm Selfie",
+                icon: "checkmark.seal.fill",
+                action: confirmSelfie
             )
+            .disabled(referenceImage == nil)
+            .opacity(referenceImage == nil ? 0.45 : 1)
+        }
+        .fullScreenCover(isPresented: $isShowingCamera) {
+            SubjectCameraPicker(image: $referenceImage)
+                .ignoresSafeArea()
+        }
+    }
+
+    private func openCameraOrDemo() {
+        #if targetEnvironment(simulator)
+        referenceImage = DemoSelfieImage.make()
+        #else
+        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+            isShowingCamera = true
+        } else {
+            referenceImage = DemoSelfieImage.make()
+        }
+        #endif
+    }
+
+    private func confirmSelfie() {
+        guard referenceImage != nil else { return }
+        captureAction()
+        continueAction()
+    }
+}
+
+enum DemoSelfieImage {
+    static func make() -> UIImage {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = UIScreen.main.scale
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 720, height: 940), format: format)
+
+        return renderer.image { context in
+            let rect = CGRect(x: 0, y: 0, width: 720, height: 940)
+            UIColor(red: 0.72, green: 0.82, blue: 0.84, alpha: 1).setFill()
+            context.fill(rect)
+
+            UIColor(red: 0.98, green: 0.96, blue: 0.91, alpha: 1).setFill()
+            UIBezierPath(ovalIn: CGRect(x: 164, y: 148, width: 392, height: 392)).fill()
+
+            UIColor(red: 0.22, green: 0.21, blue: 0.18, alpha: 1).setFill()
+            UIBezierPath(ovalIn: CGRect(x: 244, y: 284, width: 32, height: 38)).fill()
+            UIBezierPath(ovalIn: CGRect(x: 444, y: 284, width: 32, height: 38)).fill()
+
+            let smile = UIBezierPath()
+            smile.move(to: CGPoint(x: 294, y: 390))
+            smile.addCurve(to: CGPoint(x: 426, y: 390), controlPoint1: CGPoint(x: 326, y: 438), controlPoint2: CGPoint(x: 394, y: 438))
+            smile.lineWidth = 12
+            UIColor(red: 0.42, green: 0.46, blue: 0.32, alpha: 1).setStroke()
+            smile.stroke()
+
+            UIColor(red: 0.99, green: 0.98, blue: 0.95, alpha: 1).setFill()
+            UIBezierPath(roundedRect: CGRect(x: 122, y: 570, width: 476, height: 430), cornerRadius: 238).fill()
+
+            UIColor(red: 0.42, green: 0.46, blue: 0.32, alpha: 1).setStroke()
+            let framePath = UIBezierPath(roundedRect: CGRect(x: 36, y: 36, width: 648, height: 868), cornerRadius: 42)
+            framePath.lineWidth = 10
+            framePath.stroke()
+
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = .center
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: 34, weight: .semibold),
+                .foregroundColor: UIColor(red: 0.22, green: 0.21, blue: 0.18, alpha: 0.58),
+                .paragraphStyle: paragraph
+            ]
+            "Demo selfie".draw(in: CGRect(x: 0, y: 802, width: 720, height: 50), withAttributes: attributes)
+        }
+    }
+}
+
+struct SubjectCameraPicker: UIViewControllerRepresentable {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var image: UIImage?
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = UIImagePickerController.isSourceTypeAvailable(.camera) ? .camera : .photoLibrary
+        picker.allowsEditing = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        private let parent: SubjectCameraPicker
+
+        init(_ parent: SubjectCameraPicker) {
+            self.parent = parent
+        }
+
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            parent.image = info[.originalImage] as? UIImage
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
         }
     }
 }
@@ -534,39 +1765,57 @@ struct ScanSurroundingsView: View {
     let candidate: SceneCandidate
     let continueAction: () -> Void
     let backAction: () -> Void
-    @State private var scanPass = 1
+    @State private var hasCapturedScan = false
 
     var body: some View {
         ScreenScaffold(
             title: "Scan surroundings",
-            subtitle: "Pan slowly for a few seconds. The prototype simulates scene analysis from your video.",
+            subtitle: "Open camera, hold your phone upright, then slowly turn once so Blooming can see the surrounding space.",
             backAction: backAction
         ) {
             VStack(spacing: 16) {
-                CameraMockView(assetName: "ArchesWalk", mode: "SCANNING", showGuides: false)
-                    .frame(height: 270)
-
-                FrameRail()
+                SceneCaptureGuide(
+                    title: "Turn once, slowly",
+                    subtitle: "Keep the phone level and pan across the full area. Blooming will pick the best standing spot from the uploaded scan.",
+                    mode: .scan
+                )
+                .frame(height: 100)
+                .zIndex(1)
 
                 Button {
-                    scanPass += 1
+                    hasCapturedScan = true
                 } label: {
-                    Label(scanPass == 1 ? "Rescan Area" : "Scan Pass \(scanPass)", systemImage: "arrow.triangle.2.circlepath.camera")
-                        .frame(maxWidth: .infinity)
+                    SceneCameraCaptureCard(
+                        assetName: candidate.assetName,
+                        mode: hasCapturedScan ? "SCAN READY" : "OPEN CAMERA",
+                        title: hasCapturedScan ? "360 scan preview" : "Tap to scan your surroundings",
+                        subtitle: hasCapturedScan ? "Review this video scan, then confirm upload." : "Camera opens here. Pan slowly in one smooth circle.",
+                        icon: hasCapturedScan ? "checkmark.seal.fill" : "video.fill",
+                        showGuides: !hasCapturedScan
+                    )
+                    .frame(height: 236)
                 }
-                .buttonStyle(SecondaryButtonStyle())
+                .buttonStyle(.plain)
+                .accessibilityLabel(hasCapturedScan ? "Retake surroundings scan" : "Open camera to scan surroundings")
 
-                AnalysisGrid(items: [
-                    ("Light", scanPass == 1 ? "side warm" : "clean side", scanPass == 1 ? 91 : 93),
-                    ("Depth", "strong", scanPass == 1 ? 86 : 88),
-                    ("Clutter", "low", scanPass == 1 ? 78 : 82),
-                    ("Landmark", "arches", scanPass == 1 ? 88 : 90)
-                ])
-
-                OptimalSceneCard(candidate: candidate)
+                if hasCapturedScan {
+                    UploadedSceneSummary(
+                        title: "Video ready to upload",
+                        subtitle: "Blooming will calculate light, background, depth, clutter, and where people should stand."
+                    )
+                } else {
+                    Text("After the scan, you will come back here to confirm the upload.")
+                        .font(AppType.caption)
+                        .foregroundStyle(AppPalette.ivory.opacity(0.58))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         } footer: {
-            PrimaryButton(title: "Go Shoot Here", icon: "location.fill", action: continueAction)
+            PrimaryButton(
+                title: hasCapturedScan ? "Confirm and Upload Scan" : "Open Camera to Scan",
+                icon: hasCapturedScan ? "icloud.and.arrow.up.fill" : "video.fill",
+                action: hasCapturedScan ? continueAction : { hasCapturedScan = true }
+            )
         }
     }
 }
@@ -575,39 +1824,312 @@ struct CurrentSceneView: View {
     let candidate: SceneCandidate
     let continueAction: () -> Void
     let backAction: () -> Void
-    @State private var retakeCount = 0
+    @State private var hasCapturedPhoto = false
 
     var body: some View {
         ScreenScaffold(
             title: "Current scene",
-            subtitle: "Analyze this frame and mark where the subjects should stand.",
+            subtitle: "Take one photo of the scene you already like. Blooming will calculate the best subject position from that frame.",
             backAction: backAction
         ) {
             VStack(spacing: 16) {
-                SceneAnalysisImage(assetName: candidate.assetName)
-                    .frame(height: 340)
+                SceneCaptureGuide(
+                    title: "Frame the scene",
+                    subtitle: "Point at the wall, archway, landmark, or pocket of light you want to use. Leave enough space for people.",
+                    mode: .photo
+                )
+                .frame(height: 100)
+                .zIndex(1)
 
                 Button {
-                    retakeCount += 1
+                    hasCapturedPhoto = true
                 } label: {
-                    Label(retakeCount == 0 ? "Retake Scene Photo" : "Scene Photo Updated", systemImage: "camera.fill")
-                        .frame(maxWidth: .infinity)
+                    SceneCameraCaptureCard(
+                        assetName: candidate.assetName,
+                        mode: hasCapturedPhoto ? "PHOTO READY" : "OPEN CAMERA",
+                        title: hasCapturedPhoto ? "Scene photo preview" : "Tap to take a scene photo",
+                        subtitle: hasCapturedPhoto ? "Review this scene photo, then confirm upload." : "Camera opens here. Take one steady frame.",
+                        icon: hasCapturedPhoto ? "checkmark.seal.fill" : "camera.fill",
+                        showGuides: !hasCapturedPhoto
+                    )
+                    .frame(height: 268)
                 }
-                .buttonStyle(SecondaryButtonStyle())
+                .buttonStyle(.plain)
+                .accessibilityLabel(hasCapturedPhoto ? "Retake current scene photo" : "Open camera to take current scene photo")
 
-                HStack(spacing: 10) {
-                    StatusBadge(title: "Shoot here", icon: "checkmark.circle.fill", color: AppPalette.gold)
-                    StatusBadge(title: "Face light", icon: "sun.max.fill", color: AppPalette.ivory.opacity(0.86))
-                    StatusBadge(title: "Low clutter", icon: "sparkles", color: AppPalette.ivory.opacity(0.86))
+                if hasCapturedPhoto {
+                    UploadedSceneSummary(
+                        title: "Scene ready to upload",
+                        subtitle: "Blooming will calculate the best standing point and coaching frame from this photo."
+                    )
+                } else {
+                    Text("After the photo, you will come back here to confirm the upload.")
+                        .font(AppType.caption)
+                        .foregroundStyle(AppPalette.ivory.opacity(0.58))
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-
-                Text(candidate.reason)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(AppPalette.ivory.opacity(0.72))
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         } footer: {
-            PrimaryButton(title: "Start Live Coaching", icon: "camera.fill", action: continueAction)
+            PrimaryButton(
+                title: hasCapturedPhoto ? "Confirm Scene Upload" : "Take Scene Photo",
+                icon: hasCapturedPhoto ? "icloud.and.arrow.up.fill" : "camera.fill",
+                action: hasCapturedPhoto ? continueAction : { hasCapturedPhoto = true }
+            )
+        }
+    }
+}
+
+enum SceneCaptureGuideMode {
+    case scan
+    case photo
+}
+
+struct SceneCaptureGuide: View {
+    let title: String
+    let subtitle: String
+    let mode: SceneCaptureGuideMode
+
+    @State private var animate = false
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(AppPalette.paperBright)
+                    .frame(width: 58, height: 58)
+
+                if mode == .scan {
+                    Circle()
+                        .trim(from: 0.08, to: 0.86)
+                        .stroke(AppPalette.gold, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .frame(width: 38, height: 38)
+                        .rotationEffect(.degrees(animate ? 360 : 0))
+                    Image(systemName: "iphone")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(AppPalette.ivory)
+                } else {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(AppPalette.gold, lineWidth: 2)
+                        .frame(width: 38, height: 28)
+                    Image(systemName: "scope")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(AppPalette.ivory)
+                        .scaleEffect(animate ? 1.08 : 0.94)
+                }
+            }
+            .onAppear {
+                withAnimation(.linear(duration: mode == .scan ? 2.4 : 1.25).repeatForever(autoreverses: mode == .photo)) {
+                    animate = true
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(AppType.sectionTitle)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                Text(subtitle)
+                    .font(AppType.caption)
+                    .foregroundStyle(AppPalette.ivory.opacity(0.68))
+                    .lineSpacing(2)
+                    .lineLimit(3)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, minHeight: 88, alignment: .leading)
+        .background(AppPalette.paperBright, in: RoundedRectangle(cornerRadius: AppChrome.radius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: AppChrome.radius, style: .continuous)
+                .stroke(AppPalette.hairline, lineWidth: 1)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+struct SceneCameraCaptureCard: View {
+    let assetName: String
+    let mode: String
+    let title: String
+    let subtitle: String
+    let icon: String
+    let showGuides: Bool
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            Image(assetName)
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .overlay(.black.opacity(0.18))
+
+            if showGuides {
+                CameraGuideOverlay()
+                    .padding(18)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text(mode)
+                    .font(AppType.micro)
+                    .kerning(2.4)
+                    .textCase(.uppercase)
+                    .foregroundStyle(AppPalette.paper.opacity(0.78))
+
+                HStack(alignment: .bottom, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(title)
+                            .font(AppType.cardTitle)
+                            .foregroundStyle(AppPalette.paper)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.84)
+                        Text(subtitle)
+                            .font(AppType.caption)
+                            .foregroundStyle(AppPalette.paper.opacity(0.76))
+                            .lineLimit(2)
+                    }
+                    Spacer()
+                    Image(systemName: icon)
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(AppPalette.paper)
+                        .frame(width: 48, height: 48)
+                        .background(.black.opacity(0.34), in: Circle())
+                }
+            }
+            .padding(18)
+            .background(
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.72)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+        }
+        .clipShape(RoundedRectangle(cornerRadius: AppChrome.radiusLarge, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: AppChrome.radiusLarge, style: .continuous)
+                .stroke(AppPalette.hairline, lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.06), radius: 16, y: 8)
+    }
+}
+
+struct CameraGuideOverlay: View {
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = proxy.size.height
+
+            Path { path in
+                path.move(to: CGPoint(x: width * 0.18, y: height * 0.28))
+                path.addLine(to: CGPoint(x: width * 0.18, y: height * 0.18))
+                path.addLine(to: CGPoint(x: width * 0.30, y: height * 0.18))
+                path.move(to: CGPoint(x: width * 0.82, y: height * 0.28))
+                path.addLine(to: CGPoint(x: width * 0.82, y: height * 0.18))
+                path.addLine(to: CGPoint(x: width * 0.70, y: height * 0.18))
+                path.move(to: CGPoint(x: width * 0.18, y: height * 0.72))
+                path.addLine(to: CGPoint(x: width * 0.18, y: height * 0.82))
+                path.addLine(to: CGPoint(x: width * 0.30, y: height * 0.82))
+                path.move(to: CGPoint(x: width * 0.82, y: height * 0.72))
+                path.addLine(to: CGPoint(x: width * 0.82, y: height * 0.82))
+                path.addLine(to: CGPoint(x: width * 0.70, y: height * 0.82))
+            }
+            .stroke(AppPalette.paper.opacity(0.68), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+        }
+    }
+}
+
+struct UploadedSceneSummary: View {
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(AppPalette.gold)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold, design: .default))
+                Text(subtitle)
+                    .font(AppType.caption)
+                    .foregroundStyle(AppPalette.ivory.opacity(0.62))
+                    .lineSpacing(2)
+            }
+        }
+        .padding(15)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppPalette.paperBright, in: RoundedRectangle(cornerRadius: AppChrome.radius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: AppChrome.radius, style: .continuous)
+                .stroke(AppPalette.hairline, lineWidth: 1)
+        }
+    }
+}
+
+struct SceneCalculatingView: View {
+    let inputMethod: SceneInputMethod
+    let continueAction: () -> Void
+
+    @State private var progress: CGFloat = 0.18
+    @State private var didFinish = false
+
+    var body: some View {
+        FixedFooterPage {
+            VStack(spacing: 28) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: AppChrome.radiusLarge, style: .continuous)
+                        .fill(AppPalette.mistBlue.opacity(0.44))
+                        .frame(height: 360)
+
+                    VStack(spacing: 22) {
+                        ZStack {
+                            Circle()
+                                .stroke(AppPalette.paper.opacity(0.70), lineWidth: 12)
+                                .frame(width: 164, height: 164)
+                            Circle()
+                                .trim(from: 0, to: progress)
+                                .stroke(AppPalette.gold, style: StrokeStyle(lineWidth: 12, lineCap: .round))
+                                .frame(width: 164, height: 164)
+                                .rotationEffect(.degrees(-90))
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 48, weight: .semibold))
+                                .foregroundStyle(AppPalette.ivory)
+                        }
+
+                        Text(inputMethod == .scanSurroundings ? "Reading your surroundings" : "Reading your scene")
+                            .font(AppType.cardTitle)
+                    }
+                }
+
+                VStack(spacing: 8) {
+                    Text("Blooming is calculating")
+                        .font(AppType.screenTitle)
+                    Text("Finding light direction, background clutter, depth, and the best place for your subjects to stand.")
+                        .font(AppType.body)
+                        .foregroundStyle(AppPalette.ivory.opacity(0.66))
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(3)
+                        .padding(.horizontal, 10)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 24)
+            .task {
+                guard !didFinish else { return }
+                didFinish = true
+                withAnimation(.easeInOut(duration: 1.35)) {
+                    progress = 0.86
+                }
+                try? await Task.sleep(nanoseconds: 2_400_000_000)
+                guard !Task.isCancelled else { return }
+                continueAction()
+            }
+        } footer: {
+            Button("Calculating") {}
+                .buttonStyle(SecondaryTextButtonStyle())
+                .disabled(true)
+                .opacity(0.62)
         }
     }
 }
@@ -705,138 +2227,843 @@ struct LiveCoachingView: View {
     }
 }
 
-struct CaptureProcessingView: View {
-    let continueAction: () -> Void
-
-    var body: some View {
-        FixedFooterPage {
-            VStack(spacing: 28) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: AppChrome.radiusLarge, style: .continuous)
-                        .fill(AppPalette.mistBlue.opacity(0.52))
-                        .frame(height: 360)
-                    ZStack {
-                        Circle()
-                            .stroke(AppPalette.paper.opacity(0.72), lineWidth: 12)
-                            .frame(width: 168, height: 168)
-                        Circle()
-                            .trim(from: 0, to: 0.72)
-                            .stroke(AppPalette.gold, style: StrokeStyle(lineWidth: 12, lineCap: .round))
-                            .frame(width: 168, height: 168)
-                            .rotationEffect(.degrees(-90))
-                        Image(systemName: "camera.aperture")
-                            .font(.system(size: 52, weight: .medium))
-                            .foregroundStyle(AppPalette.ivory)
-                    }
-                    .symbolEffect(.pulse)
-                }
-
-                VStack(spacing: 8) {
-                    Text("Selecting best frame")
-                        .font(AppType.screenTitle)
-                    Text("Checking faces, gesture, blur, and highlight detail.")
-                        .font(AppType.body)
-                        .foregroundStyle(AppPalette.ivory.opacity(0.66))
-                }
-                .multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: .infinity)
-        } footer: {
-            PrimaryButton(title: "View Best Frames", icon: "photo.stack.fill", action: continueAction)
-        }
-    }
-}
-
 struct PreviewKeeperView: View {
     let result: CaptureSessionResult
     @Binding var selectedKeepers: Set<Int>
     let saveAction: () -> Void
-    let retakeAction: () -> Void
-    let rescoutAction: () -> Void
 
     var body: some View {
         FixedFooterPage {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Choose keepers")
+                    Text("Select moments")
                         .font(AppType.screenTitle)
-                    Text(result.finishingLook)
-                        .font(AppType.caption)
-                        .foregroundStyle(AppPalette.gold)
+                    Text("Choose the photos you want Blooming to fine tune.")
+                        .font(AppType.body)
+                        .foregroundStyle(AppPalette.ivory.opacity(0.66))
+                        .lineSpacing(3)
                 }
                 .padding(.top, 24)
 
-                BeforeAfterView(assetName: result.candidateAssets[0])
-                    .frame(height: 300)
-
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Best frames")
-                        .font(AppType.cardTitle)
-                    KeeperCardRow(
-                        assets: result.candidateAssets,
-                        selectedKeepers: $selectedKeepers
-                    )
+                HStack {
+                    Text("\(selectedKeepers.count) selected")
+                        .font(AppType.chip)
+                        .foregroundStyle(AppPalette.gold)
+                    Spacer()
+                    Button(selectedKeepers.count == result.candidateAssets.count ? "Deselect All" : "Select All") {
+                        if selectedKeepers.count == result.candidateAssets.count {
+                            selectedKeepers.removeAll()
+                        } else {
+                            selectedKeepers = Set(result.candidateAssets.indices)
+                        }
+                    }
+                    .font(AppType.chip)
+                    .foregroundStyle(AppPalette.ivory)
                 }
 
-                HStack(spacing: 10) {
-                    Button("Retake", action: retakeAction)
-                        .buttonStyle(SecondaryTextButtonStyle())
-                    Button("Try Another Scene", action: rescoutAction)
-                        .buttonStyle(SecondaryTextButtonStyle())
-                }
+                CapturedPhotoGrid(
+                    assets: result.candidateAssets,
+                    selectedKeepers: $selectedKeepers
+                )
+
             }
         } footer: {
-            PrimaryButton(title: "Save Selected", icon: "square.and.arrow.down.fill", action: saveAction)
+            PrimaryButton(title: "Fine Tune Selected", icon: "wand.and.stars", action: saveAction)
                 .disabled(selectedKeepers.isEmpty)
                 .opacity(selectedKeepers.isEmpty ? 0.48 : 1)
         }
     }
 }
 
-struct SavedFeedbackView: View {
-    let signal: KeeperSignal
-    @Binding var feedbackPositive: Bool?
-    let doneAction: () -> Void
+struct FineTuneReviewView: View {
+    let result: CaptureSessionResult
+    let selectedKeepers: Set<Int>
+    @Binding var fineTuneDecisions: [Int: Bool]
+    let isSaved: Bool
+    let saveAction: () -> Void
+
+    private var selectedItems: [(index: Int, asset: String)] {
+        selectedKeepers
+            .sorted()
+            .compactMap { index in
+                guard result.candidateAssets.indices.contains(index) else { return nil }
+                return (index, result.candidateAssets[index])
+            }
+    }
+
+    private var chosenCount: Int {
+        selectedItems.filter { fineTuneDecisions[$0.index] != nil }.count
+    }
+
+    private var isReadyToSave: Bool {
+        !isSaved && !selectedItems.isEmpty && selectedItems.allSatisfy { fineTuneDecisions[$0.index] != nil }
+    }
 
     var body: some View {
         FixedFooterPage {
-            VStack(spacing: 22) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 82, weight: .semibold))
-                    .foregroundStyle(AppPalette.gold)
-
-                VStack(spacing: 8) {
-                    Text("Saved")
-                        .font(AppType.hero)
-                    Text("Keeper signal logged locally for the recipe.")
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("AI fine tune")
+                        .font(AppType.screenTitle)
+                    Text("Choose the tuned version or keep the original for each photo.")
                         .font(AppType.body)
-                        .foregroundStyle(AppPalette.ivory.opacity(0.68))
+                        .foregroundStyle(AppPalette.ivory.opacity(0.66))
+                        .lineSpacing(3)
                 }
-                .multilineTextAlignment(.center)
+                .padding(.top, 24)
 
-                VStack(spacing: 12) {
-                    SignalRow(label: "style id", value: signal.styleId)
-                    SignalRow(label: "recipe author", value: signal.recipeAuthor)
-                    SignalRow(label: "scene path", value: signal.sceneInputMethod.rawValue)
-                    SignalRow(label: "saved count", value: "\(signal.savedPhotoCount)")
-                }
-                .padding(16)
-                .surfaceCard()
-
-                HStack(spacing: 12) {
-                    FeedbackButton(icon: "hand.thumbsup.fill", isSelected: feedbackPositive == true) {
-                        feedbackPositive = true
+                HStack {
+                    Text("\(chosenCount) of \(selectedItems.count) chosen")
+                        .font(AppType.chip)
+                        .foregroundStyle(AppPalette.gold)
+                    Spacer()
+                    Button("Accept All") {
+                        for item in selectedItems {
+                            fineTuneDecisions[item.index] = true
+                        }
                     }
-                    FeedbackButton(icon: "hand.thumbsdown.fill", isSelected: feedbackPositive == false) {
-                        feedbackPositive = false
+                    .font(AppType.chip)
+                    .foregroundStyle(AppPalette.ivory)
+                    .disabled(isSaved || selectedItems.isEmpty)
+                    .opacity(isSaved || selectedItems.isEmpty ? 0.46 : 1)
+                }
+
+                VStack(spacing: 16) {
+                    ForEach(selectedItems, id: \.index) { item in
+                        FineTunePhotoCard(
+                            assetName: item.asset,
+                            decision: fineTuneDecisions[item.index],
+                            acceptFineTuneAction: {
+                                fineTuneDecisions[item.index] = true
+                            },
+                            keepOriginalAction: {
+                                fineTuneDecisions[item.index] = false
+                            }
+                        )
                     }
                 }
             }
-            .padding(.top, 28)
-            .frame(maxWidth: .infinity)
         } footer: {
-            PrimaryButton(title: "Done", icon: "sparkles", action: doneAction)
+            VStack(spacing: 8) {
+                PrimaryButton(title: "Save", icon: "square.and.arrow.down.fill", action: saveAction)
+                    .disabled(!isReadyToSave)
+                    .opacity(isReadyToSave ? 1 : 0.48)
+                Text(isSaved ? "Saved in your Profile under My Blooming Moments." : "You can see them in your Profile under My Blooming Moments.")
+                    .font(AppType.caption)
+                    .foregroundStyle(AppPalette.ivory.opacity(0.56))
+                    .multilineTextAlignment(.center)
+            }
         }
+    }
+}
+
+struct CapturedPhotoGrid: View {
+    let assets: [String]
+    @Binding var selectedKeepers: Set<Int>
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 10) {
+            ForEach(assets.indices, id: \.self) { index in
+                CapturedPhotoTile(
+                    assetName: assets[index],
+                    index: index,
+                    isSelected: selectedKeepers.contains(index)
+                ) {
+                    if selectedKeepers.contains(index) {
+                        selectedKeepers.remove(index)
+                    } else {
+                        selectedKeepers.insert(index)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct CapturedPhotoTile: View {
+    let assetName: String
+    let index: Int
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack(alignment: .topTrailing) {
+                Image(assetName)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(height: 184)
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous)
+                            .stroke(isSelected ? AppPalette.gold : AppPalette.hairline, lineWidth: isSelected ? 2 : 1)
+                    }
+
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(isSelected ? AppPalette.gold : AppPalette.paperBright)
+                    .padding(9)
+                    .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isSelected ? "Deselect captured photo \(index + 1)" : "Select captured photo \(index + 1)")
+    }
+}
+
+struct FineTunePhotoCard: View {
+    let assetName: String
+    let decision: Bool?
+    let acceptFineTuneAction: () -> Void
+    let keepOriginalAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            BeforeAfterView(assetName: assetName)
+                .frame(height: 230)
+
+            HStack(spacing: 8) {
+                FineTuneChoiceButton(
+                    title: "Accept Fine Tune",
+                    icon: "wand.and.stars",
+                    isSelected: decision == true,
+                    action: acceptFineTuneAction
+                )
+                FineTuneChoiceButton(
+                    title: "Keep Original",
+                    icon: "photo",
+                    isSelected: decision == false,
+                    action: keepOriginalAction
+                )
+            }
+        }
+        .padding(12)
+        .background(AppPalette.paperBright, in: RoundedRectangle(cornerRadius: AppChrome.radiusLarge, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: AppChrome.radiusLarge, style: .continuous)
+                .stroke(decision == nil ? AppPalette.hairline : AppPalette.gold.opacity(0.42), lineWidth: 1)
+        }
+    }
+}
+
+struct FineTuneChoiceButton: View {
+    let title: String
+    let icon: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: isSelected ? "checkmark.circle.fill" : icon)
+                .font(AppType.chip)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .padding(.horizontal, 8)
+                .background(isSelected ? AppPalette.gold : AppPalette.panelStrong.opacity(0.72), in: Capsule())
+                .foregroundStyle(isSelected ? AppPalette.buttonText : AppPalette.ivory)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct CommentSheetView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let portfolio: CuratedPortfolio
+    let avatarAsset: String
+
+    @State private var commentText = ""
+
+    private let reactions = ["❤️", "🙌", "🔥", "👏", "😍", "🤩", "😮", "😂"]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 18) {
+                Text("COMMENTS")
+                    .font(.system(size: 15, weight: .heavy, design: .default))
+                    .kerning(0.8)
+                    .padding(.top, 18)
+
+                VStack(spacing: 8) {
+                    Text("Be the first to comment")
+                        .font(.system(size: 20, weight: .semibold, design: .default))
+                        .foregroundStyle(AppPalette.ivory.opacity(0.62))
+                    Text(portfolio.author)
+                        .font(AppType.caption)
+                        .foregroundStyle(AppPalette.gold)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .padding(.horizontal, 24)
+
+            VStack(spacing: 16) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 22) {
+                        ForEach(reactions, id: \.self) { reaction in
+                            Button {
+                                commentText += reaction
+                            } label: {
+                                Text(reaction)
+                                    .font(.system(size: 30))
+                                    .frame(width: 34, height: 34)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Add reaction")
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                }
+
+                HStack(spacing: 12) {
+                    PhotographerAvatar(assetName: avatarAsset, name: "You")
+                        .frame(width: 42, height: 42)
+
+                    TextField("Add a comment", text: $commentText)
+                        .font(.system(size: 17, weight: .medium, design: .default))
+                        .textFieldStyle(.plain)
+                        .padding(.horizontal, 16)
+                        .frame(height: 48)
+                        .background(AppPalette.panelStrong.opacity(0.58), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    if !commentText.isEmpty {
+                        Button {
+                            commentText = ""
+                            dismiss()
+                        } label: {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.system(size: 30, weight: .semibold))
+                                .foregroundStyle(AppPalette.gold)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Post comment")
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
+            }
+            .padding(.top, 16)
+            .background(AppPalette.paperBright)
+        }
+        .background(AppPalette.paperBright)
+    }
+}
+
+struct BookmarkSheetView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let portfolio: CuratedPortfolio
+    let saveAction: (CuratedPortfolio) -> Void
+
+    @State private var folders: [String] = []
+    @State private var isCreatingFolder = false
+    @State private var newFolderName = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            Button {
+                saveAction(portfolio)
+                dismiss()
+            } label: {
+                HStack(spacing: 14) {
+                    BookmarkPreviewImage(assets: portfolio.assets)
+                        .frame(width: 92, height: 92)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(portfolio.title)
+                            .font(.system(size: 19, weight: .heavy, design: .default))
+                            .lineLimit(2)
+                        Text("Saved")
+                            .font(.system(size: 18, weight: .medium, design: .default))
+                            .foregroundStyle(AppPalette.ivory.opacity(0.58))
+                    }
+
+                    Spacer()
+
+                    Image(systemName: "bookmark.fill")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(AppPalette.ivory)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Save \(portfolio.title) to all saved")
+            .padding(.top, 22)
+
+            Divider()
+                .overlay(AppPalette.hairline)
+
+            VStack(alignment: .leading, spacing: 14) {
+                Button {
+                    isCreatingFolder = true
+                } label: {
+                    HStack(spacing: 16) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 25, weight: .medium))
+                            .foregroundStyle(AppPalette.ivory)
+                            .frame(width: 92, height: 74)
+                            .background(AppPalette.panelStrong, in: RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous))
+
+                        Text("New Folder")
+                            .font(.system(size: 20, weight: .heavy, design: .default))
+                            .foregroundStyle(AppPalette.ivory)
+
+                        Spacer()
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Create new folder")
+
+                if isCreatingFolder {
+                    HStack(spacing: 10) {
+                        TextField("Folder name", text: $newFolderName)
+                            .font(.system(size: 16, weight: .medium, design: .default))
+                            .textFieldStyle(.plain)
+                            .padding(.horizontal, 14)
+                            .frame(height: 46)
+                            .background(AppPalette.panelStrong.opacity(0.55), in: RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous))
+
+                        Button("Save") {
+                            let folderName = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !folderName.isEmpty {
+                                folders.append(folderName)
+                            }
+                            saveAction(portfolio)
+                            dismiss()
+                        }
+                        .font(.system(size: 15, weight: .heavy, design: .default))
+                        .foregroundStyle(AppPalette.buttonText)
+                        .padding(.horizontal, 16)
+                        .frame(height: 46)
+                        .background(AppPalette.gold, in: RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous))
+                    }
+                }
+
+                if folders.isEmpty && !isCreatingFolder {
+                    Text("Create your first folder, or tap the saved portfolio above to keep it in All Saved.")
+                        .font(AppType.caption)
+                        .foregroundStyle(AppPalette.ivory.opacity(0.58))
+                        .lineSpacing(3)
+                }
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 24)
+        .background(AppPalette.paperBright)
+    }
+}
+
+struct BookmarkPreviewImage: View {
+    let assets: [String]
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                ForEach(Array(assets.prefix(4).enumerated()), id: \.offset) { index, asset in
+                    Image(asset)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: proxy.size.width / 2, height: proxy.size.height / 2)
+                        .clipped()
+                        .position(
+                            x: index.isMultiple(of: 2) ? proxy.size.width * 0.25 : proxy.size.width * 0.75,
+                            y: index < 2 ? proxy.size.height * 0.25 : proxy.size.height * 0.75
+                        )
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous)
+                    .stroke(AppPalette.hairline, lineWidth: 1)
+            }
+        }
+    }
+}
+
+struct MomentsSavedSheetView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let savedCount: Int
+    let viewProfileAction: () -> Void
+    let takeMoreAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Capsule()
+                .fill(AppPalette.hairline)
+                .frame(width: 54, height: 5)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 10)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Saved to My Blooming Moments")
+                    .font(AppType.profileName)
+                    .foregroundStyle(AppPalette.ivory)
+                Text("\(savedCount) photos are ready in your Profile.")
+                    .font(AppType.body)
+                    .foregroundStyle(AppPalette.ivory.opacity(0.62))
+            }
+
+            VStack(spacing: 10) {
+                Button {
+                    dismiss()
+                    viewProfileAction()
+                } label: {
+                    Label("View My Blooming Moments", systemImage: "person.crop.circle")
+                        .font(AppType.profileSection)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(AppPalette.gold, in: RoundedRectangle(cornerRadius: AppChrome.radius, style: .continuous))
+                        .foregroundStyle(AppPalette.buttonText)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    dismiss()
+                    takeMoreAction()
+                } label: {
+                    Label("Take More Photos", systemImage: "camera.fill")
+                        .font(AppType.profileSection)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(AppPalette.panelStrong.opacity(0.72), in: RoundedRectangle(cornerRadius: AppChrome.radius, style: .continuous))
+                        .foregroundStyle(AppPalette.ivory)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 24)
+        .background(AppPalette.paperBright)
+    }
+}
+
+struct InviteView: View {
+    @State private var isShowingShareSheet = false
+
+    var body: some View {
+        ScrollPage {
+            VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Invite")
+                        .font(AppType.hero)
+                    Text("Bring someone into the shoot so you can plan, pose, and save the moment together.")
+                        .font(AppType.body)
+                        .foregroundStyle(AppPalette.ivory.opacity(0.66))
+                        .lineSpacing(3)
+                }
+                .padding(.top, 22)
+
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(spacing: 12) {
+                        PhotographerAvatar(assetName: "ArchesWalk", name: "Guest")
+                            .frame(width: 54, height: 54)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Share your blooming moments")
+                                .font(AppType.profileSection)
+                            Text("Send an invite link to friends, loved ones, or anyone you want to keep close to the memory.")
+                                .font(AppType.caption)
+                                .foregroundStyle(AppPalette.ivory.opacity(0.60))
+                        }
+                    }
+
+                    PrimaryButton(title: "Send Invite", icon: "person.badge.plus") {
+                        isShowingShareSheet = true
+                    }
+                }
+                .padding(18)
+                .background(AppPalette.paperBright, in: RoundedRectangle(cornerRadius: AppChrome.radiusLarge, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: AppChrome.radiusLarge, style: .continuous)
+                        .stroke(AppPalette.hairline, lineWidth: 1)
+                }
+            }
+        }
+        .background(AppPalette.ink.ignoresSafeArea())
+        .sheet(isPresented: $isShowingShareSheet) {
+            ShareSheet(activityItems: [
+                "Share your blooming moments with friends on AI Photographer.",
+                URL(string: "https://aiphotographer.local/invite/blooming-moments")!
+            ])
+            .presentationDetents([.medium, .large])
+        }
+    }
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+struct ProfileView: View {
+    let savedPortfolios: [CuratedPortfolio]
+    let savedMoments: [SavedBloomingMoment]
+    let avatarAsset: String
+
+    private var momentGroups: [(sceneTitle: String, moments: [SavedBloomingMoment])] {
+        Dictionary(grouping: savedMoments, by: \.sceneTitle)
+            .map { (sceneTitle: $0.key, moments: $0.value) }
+            .sorted { $0.sceneTitle < $1.sceneTitle }
+    }
+
+    var body: some View {
+        ScrollPage {
+            VStack(alignment: .leading, spacing: 24) {
+                HStack(spacing: 14) {
+                    PhotographerAvatar(assetName: avatarAsset, name: "Ann Li")
+                        .frame(width: 68, height: 68)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Ann Li")
+                            .font(AppType.profileName)
+                        Text("Treasured moments, campus light, saved recipes")
+                            .font(AppType.caption)
+                            .foregroundStyle(AppPalette.ivory.opacity(0.60))
+                    }
+                }
+                .padding(.top, 22)
+
+                ProfileSection(title: "My Blooming Moments") {
+                    if momentGroups.isEmpty {
+                        EmptyProfileState(
+                            icon: "photo.on.rectangle",
+                            title: "No blooming moments yet",
+                            subtitle: "Saved fine-tuned photos will appear here by themed scene."
+                        )
+                    } else {
+                        VStack(spacing: 16) {
+                            ForEach(momentGroups, id: \.sceneTitle) { group in
+                                ProfileMomentSceneGroup(
+                                    sceneTitle: group.sceneTitle,
+                                    moments: group.moments
+                                )
+                            }
+                        }
+                    }
+                }
+
+                ProfileSection(title: "Favorite Curated Portfolios") {
+                    if savedPortfolios.isEmpty {
+                        EmptyProfileState(
+                            icon: "bookmark",
+                            title: "No favorite portfolios yet",
+                            subtitle: "Bookmark a photographer's portfolio to keep it here."
+                        )
+                    } else {
+                        VStack(spacing: 12) {
+                            ForEach(savedPortfolios) { portfolio in
+                                SavedPortfolioRow(portfolio: portfolio)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .background(AppPalette.ink.ignoresSafeArea())
+    }
+}
+
+struct ProfileMomentSceneGroup: View {
+    let sceneTitle: String
+    let moments: [SavedBloomingMoment]
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(sceneTitle)
+                    .font(AppType.profileItemTitle)
+                Spacer()
+                Text("\(moments.count)")
+                    .font(AppType.chip)
+                    .foregroundStyle(AppPalette.gold)
+            }
+
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(moments.prefix(9)) { moment in
+                    MomentThumbnail(moment: moment)
+                }
+            }
+        }
+    }
+}
+
+struct MomentThumbnail: View {
+    let moment: SavedBloomingMoment
+
+    var body: some View {
+        Image(moment.assetName)
+            .resizable()
+            .scaledToFill()
+            .saturation(moment.isFineTuned ? 1.06 : 1)
+            .contrast(moment.isFineTuned ? 1.10 : 1)
+            .brightness(moment.isFineTuned ? 0.025 : 0)
+            .frame(height: 108)
+            .frame(maxWidth: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous)
+                    .stroke(AppPalette.hairline, lineWidth: 1)
+            }
+            .overlay(alignment: .topTrailing) {
+                if moment.isFineTuned {
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(AppPalette.buttonText)
+                        .padding(5)
+                        .background(AppPalette.gold, in: Circle())
+                        .padding(6)
+                }
+            }
+    }
+}
+
+struct ProfileSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(AppType.profileSection)
+
+            content
+        }
+        .padding(16)
+        .background(AppPalette.paperBright, in: RoundedRectangle(cornerRadius: AppChrome.radiusLarge, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: AppChrome.radiusLarge, style: .continuous)
+                .stroke(AppPalette.hairline, lineWidth: 1)
+        }
+    }
+}
+
+struct SavedPortfolioRow: View {
+    let portfolio: CuratedPortfolio
+
+    var body: some View {
+        HStack(spacing: 12) {
+            BookmarkPreviewImage(assets: portfolio.assets)
+                .frame(width: 70, height: 70)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(portfolio.title)
+                    .font(AppType.profileItemTitle)
+                    .lineLimit(2)
+                Text(portfolio.author)
+                    .font(AppType.caption)
+                    .foregroundStyle(AppPalette.gold)
+            }
+
+            Spacer()
+
+            Image(systemName: "bookmark.fill")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(AppPalette.ivory.opacity(0.72))
+        }
+    }
+}
+
+struct EmptyProfileState: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 20, weight: .semibold))
+                .frame(width: 42, height: 42)
+                .background(AppPalette.panelStrong.opacity(0.56), in: Circle())
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(AppType.profileItemTitle)
+                Text(subtitle)
+                    .font(AppType.caption)
+                    .foregroundStyle(AppPalette.ivory.opacity(0.56))
+            }
+        }
+    }
+}
+
+struct AppBottomNavigationBar: View {
+    @Binding var activeTab: AppTab
+    let avatarAsset: String
+    let homeAction: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 0) {
+            bottomItem(title: "Home", icon: "house.fill", tab: .home, action: homeAction)
+            bottomItem(title: "Invite", icon: "sparkles", tab: .invite) {
+                activeTab = .invite
+            }
+            profileItem
+        }
+        .padding(.horizontal, 22)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
+        .background(AppPalette.paperBright.ignoresSafeArea(edges: .bottom))
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(AppPalette.hairline)
+                .frame(height: 1)
+        }
+    }
+
+    private func bottomItem(title: String, icon: String, tab: AppTab, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 23, weight: .semibold))
+                    .frame(height: 26)
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold, design: .default))
+            }
+            .frame(maxWidth: .infinity)
+            .foregroundStyle(activeTab == tab ? AppPalette.ivory : AppPalette.ivory.opacity(0.44))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+
+    private var profileItem: some View {
+        Button {
+            activeTab = .profile
+        } label: {
+            VStack(spacing: 4) {
+                Image(avatarAsset)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 28, height: 28)
+                    .clipShape(Circle())
+                    .overlay(alignment: .topTrailing) {
+                        Circle()
+                            .fill(Color(red: 0.920, green: 0.280, blue: 0.330))
+                            .frame(width: 7, height: 7)
+                            .offset(x: 1, y: -1)
+                    }
+                Text("Profile")
+                    .font(.system(size: 12, weight: .semibold, design: .default))
+            }
+            .frame(maxWidth: .infinity)
+            .foregroundStyle(activeTab == .profile ? AppPalette.ivory : AppPalette.ivory.opacity(0.44))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Profile")
     }
 }
 
@@ -1537,14 +3764,53 @@ struct KeeperCard: View {
 
 struct AppWordmark: View {
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "camera.aperture")
-                .font(.system(size: 14, weight: .bold))
-            Text("AI Photographer")
-                .font(.system(size: 15, weight: .heavy, design: .default))
+        BloomingWordmark()
+    }
+}
+
+struct BloomingWordmark: View {
+    var body: some View {
+        Image("BloomingLogo")
+            .resizable()
+            .scaledToFit()
+            .frame(width: 160, height: 64, alignment: .leading)
+            .accessibilityLabel("Blooming")
+    }
+}
+
+struct BloomingSprig: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + 2, y: rect.maxY - 3))
+        path.addCurve(
+            to: CGPoint(x: rect.maxX - 5, y: rect.minY + 3),
+            control1: CGPoint(x: rect.midX * 0.68, y: rect.midY + 6),
+            control2: CGPoint(x: rect.midX * 1.08, y: rect.midY - 8)
+        )
+
+        let leaves = [
+            (0.34, -0.18, -34.0),
+            (0.53, 0.10, 34.0),
+            (0.70, -0.23, -38.0),
+            (0.84, 0.05, 30.0)
+        ]
+
+        for leaf in leaves {
+            let center = CGPoint(x: rect.minX + rect.width * leaf.0, y: rect.midY + rect.height * leaf.1)
+            let leafSize = CGSize(width: rect.width * 0.12, height: rect.height * 0.30)
+            var leafPath = Path(ellipseIn: CGRect(
+                x: center.x - leafSize.width / 2,
+                y: center.y - leafSize.height / 2,
+                width: leafSize.width,
+                height: leafSize.height
+            ))
+            leafPath = leafPath.applying(CGAffineTransform(translationX: -center.x, y: -center.y))
+            leafPath = leafPath.applying(CGAffineTransform(rotationAngle: CGFloat(leaf.2 * .pi / 180)))
+            leafPath = leafPath.applying(CGAffineTransform(translationX: center.x, y: center.y))
+            path.addPath(leafPath)
         }
-        .foregroundStyle(AppPalette.gold)
-        .accessibilityElement(children: .combine)
+
+        return path
     }
 }
 
@@ -1648,42 +3914,6 @@ struct StatusBadge: View {
     }
 }
 
-struct SignalRow: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        HStack {
-            Text(label)
-                .font(AppType.micro)
-                .kerning(1.8)
-                .textCase(.uppercase)
-                .foregroundStyle(AppPalette.ivory.opacity(0.52))
-            Spacer()
-            Text(value)
-                .font(.system(size: 13, weight: .medium))
-                .multilineTextAlignment(.trailing)
-        }
-    }
-}
-
-struct FeedbackButton: View {
-    let icon: String
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 22, weight: .bold))
-                .frame(width: 58, height: 52)
-                .background(isSelected ? AppPalette.gold : AppPalette.panel, in: RoundedRectangle(cornerRadius: AppChrome.radius, style: .continuous))
-                .foregroundStyle(isSelected ? AppPalette.buttonText : AppPalette.ivory)
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 struct SurfaceCardModifier: ViewModifier {
     let cornerRadius: CGFloat
 
@@ -1711,21 +3941,173 @@ struct MemoryBackdrop: View {
             .overlay(alignment: .top) {
                 Rectangle()
                     .fill(AppPalette.backdropMid)
-                    .frame(height: 320)
+                    .frame(height: 178)
                     .ignoresSafeArea()
             }
     }
 }
 
+struct BloomingHomeBackdrop: View {
+    var body: some View {
+        GeometryReader { proxy in
+            let headerHeight = min(350, proxy.size.height * 0.40)
+
+            ZStack(alignment: .top) {
+                AppPalette.ink
+
+                Image("BloomingHeaderBackdrop")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: proxy.size.width, height: headerHeight)
+                    .clipped()
+
+                Rectangle()
+                    .fill(AppPalette.ink)
+                    .frame(height: proxy.size.height * 0.66)
+                    .offset(y: headerHeight)
+            }
+        }
+    }
+}
+
+struct BloomingWelcomeBackdrop: View {
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .topTrailing) {
+                AppPalette.airBlue
+
+                Image("BloomingHeaderBackdrop")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .opacity(0.72)
+                    .clipped()
+
+                LinearGradient(
+                    colors: [
+                        AppPalette.airBlue.opacity(0.34),
+                        AppPalette.panel.opacity(0.28),
+                        AppPalette.airBlue.opacity(0.30)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+
+                SoftBreezeLines()
+                    .stroke(Color.white.opacity(0.20), style: StrokeStyle(lineWidth: 1.1, lineCap: .round))
+                    .frame(width: proxy.size.width * 0.86, height: proxy.size.height * 0.32)
+                    .offset(x: -10, y: proxy.size.height * 0.08)
+
+                WelcomeFlowerTrace()
+                    .stroke(Color.white.opacity(0.44), style: StrokeStyle(lineWidth: 1.0, lineCap: .round, lineJoin: .round))
+                    .frame(width: 156, height: 230)
+                    .padding(.top, proxy.size.height * 0.10)
+                    .padding(.trailing, -8)
+            }
+        }
+    }
+}
+
+struct WelcomeFlowerTrace: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let x: (CGFloat) -> CGFloat = { rect.minX + rect.width * $0 }
+        let y: (CGFloat) -> CGFloat = { rect.minY + rect.height * $0 }
+
+        path.move(to: CGPoint(x: x(0.55), y: y(0.98)))
+        path.addCurve(
+            to: CGPoint(x: x(0.54), y: y(0.24)),
+            control1: CGPoint(x: x(0.42), y: y(0.76)),
+            control2: CGPoint(x: x(0.68), y: y(0.46))
+        )
+        path.move(to: CGPoint(x: x(0.54), y: y(0.53)))
+        path.addCurve(
+            to: CGPoint(x: x(0.24), y: y(0.36)),
+            control1: CGPoint(x: x(0.43), y: y(0.48)),
+            control2: CGPoint(x: x(0.33), y: y(0.42))
+        )
+        path.move(to: CGPoint(x: x(0.58), y: y(0.43)))
+        path.addCurve(
+            to: CGPoint(x: x(0.86), y: y(0.28)),
+            control1: CGPoint(x: x(0.68), y: y(0.38)),
+            control2: CGPoint(x: x(0.76), y: y(0.31))
+        )
+        path.move(to: CGPoint(x: x(0.48), y: y(0.72)))
+        path.addCurve(
+            to: CGPoint(x: x(0.20), y: y(0.66)),
+            control1: CGPoint(x: x(0.40), y: y(0.69)),
+            control2: CGPoint(x: x(0.30), y: y(0.66))
+        )
+
+        addPetalCluster(to: &path, center: CGPoint(x: x(0.20), y: y(0.34)), radius: rect.width * 0.10)
+        addPetalCluster(to: &path, center: CGPoint(x: x(0.88), y: y(0.27)), radius: rect.width * 0.09)
+        addPetalCluster(to: &path, center: CGPoint(x: x(0.18), y: y(0.66)), radius: rect.width * 0.08)
+
+        return path
+    }
+
+    private func addPetalCluster(to path: inout Path, center: CGPoint, radius: CGFloat) {
+        for index in 0..<5 {
+            let angle = CGFloat(index) * (.pi * 2 / 5)
+            let petalCenter = CGPoint(
+                x: center.x + cos(angle) * radius * 0.56,
+                y: center.y + sin(angle) * radius * 0.42
+            )
+            path.addEllipse(in: CGRect(
+                x: petalCenter.x - radius * 0.36,
+                y: petalCenter.y - radius * 0.24,
+                width: radius * 0.72,
+                height: radius * 0.48
+            ))
+        }
+        path.addEllipse(in: CGRect(
+            x: center.x - radius * 0.14,
+            y: center.y - radius * 0.14,
+            width: radius * 0.28,
+            height: radius * 0.28
+        ))
+    }
+}
+
+struct SoftBreezeLines: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let lines: [(CGFloat, CGFloat, CGFloat, CGFloat)] = [
+            (0.58, 0.10, 0.92, 0.04),
+            (0.62, 0.20, 1.02, 0.16),
+            (0.08, 0.36, 0.44, 0.31),
+            (0.55, 0.52, 0.98, 0.42)
+        ]
+
+        for line in lines {
+            path.move(to: CGPoint(x: rect.width * line.0, y: rect.height * line.1))
+            path.addCurve(
+                to: CGPoint(x: rect.width * line.2, y: rect.height * line.3),
+                control1: CGPoint(x: rect.width * (line.0 + 0.12), y: rect.height * (line.1 - 0.08)),
+                control2: CGPoint(x: rect.width * (line.2 - 0.18), y: rect.height * (line.3 + 0.10))
+            )
+        }
+
+        return path
+    }
+}
+
 enum AppType {
-    static let hero = Font.custom("Didot", size: 36)
-    static let screenTitle = Font.custom("Didot", size: 32)
-    static let sectionTitle = Font.custom("Didot", size: 26)
-    static let cardTitle = Font.custom("Didot", size: 27)
-    static let body = Font.system(size: 15, weight: .regular, design: .default)
-    static let caption = Font.system(size: 13, weight: .medium, design: .default)
-    static let chip = Font.system(size: 12, weight: .semibold, design: .default)
-    static let micro = Font.system(size: 10, weight: .semibold, design: .default)
+    static let welcomeHero = Font.custom("BodoniSvtyTwoITCTT-Book", size: 42)
+    static let homeHero = Font.custom("BodoniSvtyTwoITCTT-Book", size: 36)
+    static let wordmark = Font.custom("SnellRoundhand", size: 25)
+    static let hero = Font.custom("BodoniSvtyTwoITCTT-Book", size: 38)
+    static let screenTitle = Font.custom("BodoniSvtyTwoITCTT-Book", size: 34)
+    static let sectionTitle = Font.custom("BodoniSvtyTwoITCTT-Book", size: 27)
+    static let cardTitle = Font.custom("BodoniSvtyTwoITCTT-Book", size: 27)
+    static let sceneTitle = Font.custom("BodoniSvtyTwoSCITCTT-Book", size: 31)
+    static let body = Font.custom("AvenirNext-Regular", size: 15)
+    static let caption = Font.custom("AvenirNext-Regular", size: 13)
+    static let chip = Font.custom("AvenirNext-DemiBold", size: 12)
+    static let micro = Font.custom("AvenirNext-DemiBold", size: 10)
+    static let profileName = Font.custom("AvenirNext-DemiBold", size: 24)
+    static let profileSection = Font.custom("AvenirNext-DemiBold", size: 16)
+    static let profileItemTitle = Font.custom("AvenirNext-DemiBold", size: 15)
 }
 
 enum AppChrome {
@@ -1736,12 +4118,14 @@ enum AppChrome {
 
 enum AppPalette {
     static let ink = Color(red: 0.955, green: 0.946, blue: 0.926)
-    static let backdropMid = Color(red: 0.640, green: 0.748, blue: 0.790)
+    static let airBlue = Color(red: 0.820, green: 0.902, blue: 0.930)
+    static let backdropMid = Color(red: 0.675, green: 0.775, blue: 0.805)
     static let mistBlue = Color(red: 0.610, green: 0.720, blue: 0.765)
     static let graphite = Color(red: 0.878, green: 0.858, blue: 0.820)
     static let panel = Color(red: 0.982, green: 0.972, blue: 0.952)
     static let panelStrong = Color(red: 0.910, green: 0.898, blue: 0.866)
     static let paper = Color(red: 0.992, green: 0.986, blue: 0.972)
+    static let paperBright = Color(red: 0.998, green: 0.995, blue: 0.986)
     static let cameraPanel = Color(red: 0.982, green: 0.972, blue: 0.952).opacity(0.92)
     static let ivory = Color(red: 0.210, green: 0.216, blue: 0.195)
     static let gold = Color(red: 0.420, green: 0.462, blue: 0.320)

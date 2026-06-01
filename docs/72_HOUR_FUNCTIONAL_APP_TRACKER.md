@@ -26,6 +26,10 @@ By the end of the 72-hour window, the app should support a real path through:
 - Subject reference capture or picker.
 - Scene frame capture or picker.
 - One working vision-model integration path, provider swappable.
+- Portfolio-level shot matching logic:
+  - compare user scene against selected portfolio references
+  - adapt the closest matching reference when confidence is high
+  - synthesize from the portfolio style when the scene is different
 - Live coaching screen that uses real camera input, even if readiness starts with lightweight heuristics.
 - Save selected images to Photos.
 - Local keeper signal storage.

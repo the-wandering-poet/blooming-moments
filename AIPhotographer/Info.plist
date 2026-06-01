@@ -22,6 +22,10 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>AI Photographer uses the camera to capture a selfie reference for guided photo moments.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>AI Photographer can use your photo library to select a selfie reference when the camera is unavailable.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

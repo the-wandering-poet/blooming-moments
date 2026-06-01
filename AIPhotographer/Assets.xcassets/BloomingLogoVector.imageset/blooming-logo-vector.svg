@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="410" height="92" viewBox="0 0 410 92">
+  <text
+    x="4"
+    y="63"
+    fill="#6b7652"
+    font-family="Snell Roundhand, SnellRoundhand, cursive"
+    font-size="64"
+    font-style="italic"
+    font-weight="400">Blooming</text>
+  <path fill="none" stroke="#6b7652" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" d="M282 57 C301 50,319 31,343 13"/>
+  <path fill="none" stroke="#6b7652" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" d="M302 46 C299 38,303 32,311 29 C313 37,310 43,302 46 Z"/>
+  <path fill="none" stroke="#6b7652" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" d="M322 28 C318 20,322 14,330 11 C333 19,330 25,322 28 Z"/>
+  <path fill="none" stroke="#6b7652" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" d="M343 13 C340 6,344 2,351 1 C354 8,350 12,343 13 Z"/>
+  <path fill="none" stroke="#6b7652" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" d="M291 53 C288 45,282 41,275 43 C278 50,284 54,291 53 Z"/>
+</svg>
