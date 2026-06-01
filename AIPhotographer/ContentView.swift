@@ -3955,10 +3955,21 @@ struct BloomingHomeBackdrop: View {
             ZStack(alignment: .top) {
                 AppPalette.ink
 
+                LinearGradient(
+                    colors: [
+                        AppPalette.powderBlue,
+                        AppPalette.powderBlueShadow.opacity(0.82)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .frame(width: proxy.size.width, height: headerHeight)
+
                 Image("BloomingHeaderBackdrop")
                     .resizable()
                     .scaledToFill()
                     .frame(width: proxy.size.width, height: headerHeight)
+                    .opacity(0.42)
                     .clipped()
 
                 Rectangle()
@@ -4118,6 +4129,8 @@ enum AppChrome {
 
 enum AppPalette {
     static let ink = Color(red: 0.955, green: 0.946, blue: 0.926)
+    static let powderBlue = Color(red: 0.894, green: 0.922, blue: 0.945)
+    static let powderBlueShadow = Color(red: 0.878, green: 0.910, blue: 0.941)
     static let airBlue = Color(red: 0.820, green: 0.902, blue: 0.930)
     static let backdropMid = Color(red: 0.675, green: 0.775, blue: 0.805)
     static let mistBlue = Color(red: 0.610, green: 0.720, blue: 0.765)
