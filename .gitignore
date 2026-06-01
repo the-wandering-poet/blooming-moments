@@ -4,3 +4,4 @@ DerivedData/
 xcuserdata/
 Secrets.plist
 *.env
+demo-output/
