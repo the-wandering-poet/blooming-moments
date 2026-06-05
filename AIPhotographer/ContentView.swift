@@ -657,27 +657,31 @@ struct ContentView: View {
     }
 
     private func buildSceneRuntimePlan() async throws -> SceneRuntimeModels.GenerateScenePlanResponse {
-        if sceneInputMethod == .currentScene,
-           let sceneInputAnalysis,
-           let scenePlanOutput = PhoneTestSubjectSceneAnalysisAdapter.scenePlan(from: sceneInputAnalysis) {
-            return scenePlanOutput.scenePlan
-        }
-
         let qualityContext = sceneRuntimeQualitySignals()
         let uploadFailureReason = sceneRuntimeUploadFailureReason()
-        return try await sceneRuntimeIntegration.ingestAndGenerateScenePlan(
-            context: SceneRuntimeFrontendCaptureContext(
-                sessionId: "session_\(selectedScenario.id)_before_capture",
-                styleProfileId: selectedPortfolio.styleProfileId,
-                protectedSubjectSetId: subjectProfile?.protectedSubjectSetId ?? "protected_subject_set_1",
-                sceneInputAttemptId: "attempt_\(selectedScenario.id)_\(sceneInputMethod == .scanSurroundings ? "scan" : "photo")",
-                sceneInputMode: sceneInputMethod == .scanSurroundings ? .scanVideo : .singlePhoto,
-                mediaRefs: ["local_test://scene-runtime/\(sceneCandidate.assetName)"],
-                uploadAnyway: allowsSuboptimalSceneInput,
-                qualitySignals: qualityContext,
-                uploadFailureReason: uploadFailureReason
-            )
+        let fallbackPlanOutput = sceneInputMethod == .currentScene
+            ? sceneInputAnalysis.flatMap { PhoneTestSubjectSceneAnalysisAdapter.scenePlan(from: $0) }
+            : nil
+        let context = sceneInputAnalysis?.captureContext ?? SceneRuntimeFrontendCaptureContext(
+            sessionId: "session_\(selectedScenario.id)_before_capture",
+            styleProfileId: selectedPortfolio.styleProfileId,
+            protectedSubjectSetId: subjectProfile?.protectedSubjectSetId ?? "protected_subject_set_1",
+            sceneInputAttemptId: "attempt_\(selectedScenario.id)_\(sceneInputMethod == .scanSurroundings ? "scan" : "photo")",
+            sceneInputMode: sceneInputMethod == .scanSurroundings ? .scanVideo : .singlePhoto,
+            mediaRefs: ["local_test://scene-runtime/\(sceneCandidate.assetName)"],
+            uploadAnyway: allowsSuboptimalSceneInput,
+            qualitySignals: qualityContext,
+            uploadFailureReason: uploadFailureReason
         )
+
+        do {
+            return try await sceneRuntimeIntegration.ingestAndGenerateScenePlan(context: context)
+        } catch {
+            if let fallbackPlanOutput {
+                return fallbackPlanOutput.scenePlan
+            }
+            throw error
+        }
     }
 
     private func handleCurrentScenePhotoCapture(_ image: UIImage) {
@@ -735,8 +739,11 @@ struct ContentView: View {
 
     private func storeScenePlanForLiveShooting(_ scenePlan: SceneRuntimeModels.GenerateScenePlanResponse) {
         if let sceneInputAnalysis,
+           scenePlan.fallback != nil,
            let scenePlanOutput = PhoneTestSubjectSceneAnalysisAdapter.scenePlan(from: sceneInputAnalysis) {
             phoneTestScenePlanOutput = scenePlanOutput
+        } else {
+            phoneTestScenePlanOutput = nil
         }
         sceneRuntimeScenePlan = scenePlan
         sceneRuntimeAnalysisState = SceneRuntimeSceneAnalysisDisplayState(scenePlan: scenePlan)
