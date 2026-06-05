@@ -30,6 +30,7 @@ final class PhoneTestCameraController: NSObject, ObservableObject {
     private let sessionQueue = DispatchQueue(label: "com.blooming.phone-test-camera.session")
     private let preferredPosition: AVCaptureDevice.Position
     private var photoOutput: AVCapturePhotoOutput?
+    private var activeDevice: AVCaptureDevice?
     private var captureCompletion: ((UIImage) -> Void)?
     private var isConfigured = false
 
@@ -99,6 +100,28 @@ final class PhoneTestCameraController: NSObject, ObservableObject {
         }
     }
 
+    func applyCameraRecommendation(
+        _ recommendation: SceneRuntimeModels.InitialCameraSettingsRecommendation,
+        focusPoint: CGPoint?
+    ) {
+        sessionQueue.async { [weak self] in
+            guard let self, let device = self.activeDevice else { return }
+
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+
+                let point = Self.normalizedPoint(focusPoint)
+                self.applyFocus(recommendation.focus, point: point, to: device)
+                self.applyExposure(recommendation.exposure, point: point, to: device)
+                self.applyWhiteBalance(recommendation.whiteBalance, to: device)
+                self.applyZoom(recommendation.zoomLens, to: device)
+            } catch {
+                return
+            }
+        }
+    }
+
     private func configureAndStart() {
         sessionQueue.async { [weak self] in
             guard let self else { return }
@@ -127,6 +150,7 @@ final class PhoneTestCameraController: NSObject, ObservableObject {
         guard let device else {
             throw PhoneTestCameraError.cameraUnavailable
         }
+        activeDevice = device
 
         let input = try AVCaptureDeviceInput(device: device)
         guard session.canAddInput(input) else {
@@ -145,6 +169,64 @@ final class PhoneTestCameraController: NSObject, ObservableObject {
         publishCapabilities(for: device, output: output)
     }
 
+    private func applyFocus(
+        _ recommendation: SceneRuntimeModels.FocusRecommendation,
+        point: CGPoint,
+        to device: AVCaptureDevice
+    ) {
+        if device.isFocusPointOfInterestSupported {
+            device.focusPointOfInterest = point
+        }
+        if device.isFocusModeSupported(.continuousAutoFocus) {
+            device.focusMode = .continuousAutoFocus
+        } else if device.isFocusModeSupported(.autoFocus) {
+            device.focusMode = .autoFocus
+        }
+    }
+
+    private func applyExposure(
+        _ recommendation: SceneRuntimeModels.ExposureRecommendation,
+        point: CGPoint,
+        to device: AVCaptureDevice
+    ) {
+        if device.isExposurePointOfInterestSupported {
+            device.exposurePointOfInterest = point
+        }
+        if device.isExposureModeSupported(.continuousAutoExposure) {
+            device.exposureMode = .continuousAutoExposure
+        } else if device.isExposureModeSupported(.autoExpose) {
+            device.exposureMode = .autoExpose
+        }
+        guard let bias = recommendation.bias else { return }
+        let clampedBias = min(max(Float(bias), device.minExposureTargetBias), device.maxExposureTargetBias)
+        device.setExposureTargetBias(clampedBias, completionHandler: nil)
+    }
+
+    private func applyWhiteBalance(
+        _ recommendation: SceneRuntimeModels.WhiteBalanceRecommendation,
+        to device: AVCaptureDevice
+    ) {
+        if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+            device.whiteBalanceMode = .continuousAutoWhiteBalance
+        } else if device.isWhiteBalanceModeSupported(.autoWhiteBalance) {
+            device.whiteBalanceMode = .autoWhiteBalance
+        }
+    }
+
+    private func applyZoom(
+        _ recommendation: SceneRuntimeModels.ZoomLensRecommendation?,
+        to device: AVCaptureDevice
+    ) {
+        guard let recommendation, let targetZoomFactor = recommendation.targetZoomFactor else {
+            return
+        }
+        let requestedZoom = CGFloat(targetZoomFactor)
+        let recommendationMax = recommendation.maxDigitalZoomFactor.map { CGFloat($0) } ?? device.maxAvailableVideoZoomFactor
+        let maxZoom = min(device.maxAvailableVideoZoomFactor, recommendationMax)
+        let zoom = min(max(requestedZoom, device.minAvailableVideoZoomFactor), maxZoom)
+        device.videoZoomFactor = zoom
+    }
+
     private static func makeCameraDevice(preferredPosition: AVCaptureDevice.Position) -> AVCaptureDevice? {
         if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: preferredPosition) {
             return device
@@ -160,6 +242,14 @@ final class PhoneTestCameraController: NSObject, ObservableObject {
         if connection.isVideoRotationAngleSupported(portraitRotationAngle) {
             connection.videoRotationAngle = portraitRotationAngle
         }
+    }
+
+    private static func normalizedPoint(_ point: CGPoint?) -> CGPoint {
+        let point = point ?? CGPoint(x: 0.5, y: 0.5)
+        return CGPoint(
+            x: min(max(point.x, 0.0), 1.0),
+            y: min(max(point.y, 0.0), 1.0)
+        )
     }
 
     private func publishCapabilities(for device: AVCaptureDevice, output: AVCapturePhotoOutput) {

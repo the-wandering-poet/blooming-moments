@@ -394,7 +394,7 @@ struct ContentView: View {
             ])
         }
         if args.contains("--debug-subject-calibration-uploaded") {
-            _subjectReferenceImage = State(initialValue: UIImage(named: "SubjectSelfieReference") ?? DemoSelfieImage.make())
+            _subjectReferenceImage = State(initialValue: UIImage(named: "SubjectSelfieCleanReference") ?? DemoSelfieImage.make())
             _subjectProfile = State(initialValue: SubjectProfile(
                 count: 2,
                 readinessNotes: ["selfie uploaded", "face is clear", "ready for processing"]
@@ -810,9 +810,12 @@ struct ContentView: View {
 
     @MainActor
     private func prepareFinalShootingCamera() async {
+        guard !isFinalCaptureInProgress else { return }
+        isFinalCaptureInProgress = true
         await runFinalCapturePreparation {
             step = .finalShooting
         }
+        isFinalCaptureInProgress = false
     }
 
     @MainActor
@@ -838,9 +841,81 @@ struct ContentView: View {
             finalMomentRendererErrorMessage = nil
             onPrepared()
         } catch {
-            finalCaptureErrorMessage = "Final shooting handoff could not be prepared from the current scene plan."
-            isReadyToCapture = false
+            if let handoff = makeDemoBestEffortHandoff() {
+                beforeCaptureRuntimeHandoff = handoff
+                finalCapturedPhotoA = nil
+                finalCaptureRenderHandoff = nil
+                finalCaptureErrorMessage = nil
+                finalMomentABCResult = nil
+                finalMomentRendererErrorMessage = nil
+                onPrepared()
+            } else {
+                finalCaptureErrorMessage = "Final shooting handoff could not be prepared from the current scene plan."
+                isReadyToCapture = false
+            }
         }
+    }
+
+    private func makeDemoBestEffortHandoff() -> SceneRuntimeModels.BeforeCaptureFinalMomentHandoff? {
+        guard let scenePlan = sceneRuntimeScenePlan else { return nil }
+        let recommendation = scenePlan.initialCameraSettingsRecommendation
+        let capturedAffordanceMetadata = sceneRuntimeLiveCoachState.response?.capturedAffordanceMetadata
+            ?? SceneRuntimeModels.CapturedAffordanceMetadata(
+                protectedSubjectFocusReady: false,
+                faceExposureUsable: false,
+                rimHairEdgeLightPreserved: nil,
+                naturalExpressionOrInteractionObserved: false,
+                cropHeadroomPreserved: false,
+                postCaptureFineTuneEligible: scenePlan.postCapturePrerequisites.canFineTuneLater ?? [],
+                weakPrerequisites: scenePlan.postCapturePrerequisites.mustCaptureCorrectly
+            )
+        let statusAtCapture = sceneRuntimeLiveCoachState.response?.postCapturePrerequisiteStatus
+            ?? Dictionary(uniqueKeysWithValues: scenePlan.postCapturePrerequisites.mustCaptureCorrectly.map {
+                ($0.rawValue, "best_effort_demo")
+            })
+        let settingsUsed = SceneRuntimeModels.CameraSettingsUsed(
+            settingsId: "camera_settings_used_demo_\(scenePlan.scenePlanId)",
+            appliedRecommendationId: recommendation.recommendationId,
+            focusModeUsed: recommendation.focus.mode,
+            focusPointStrategyUsed: recommendation.focus.focusPointStrategy,
+            focusStatus: .needsOperatorAdjustment,
+            exposureMeteringTargetUsed: recommendation.exposure.meteringTarget,
+            exposureBiasUsed: recommendation.exposure.bias,
+            exposureStatus: .needsOperatorAdjustment,
+            whiteBalanceModeUsed: recommendation.whiteBalance.mode,
+            whiteBalanceStatus: .pending,
+            lensUsed: recommendation.zoomLens?.preferredLens,
+            zoomFactorUsed: recommendation.zoomLens?.targetZoomFactor,
+            zoomLensStatus: .pending,
+            depthModeUsed: recommendation.depth?.mode,
+            depthDataDeliveryUsed: recommendation.depth?.depthDataDeliveryPreferred,
+            portraitEffectsMatteUsed: recommendation.depth?.portraitEffectsMattePreferred,
+            depthStatus: recommendation.depth == nil ? .unavailable : .pending,
+            photoQualityPrioritizationUsed: recommendation.capture?.photoQualityPrioritization,
+            burstCountRequested: recommendation.capture?.burstCount,
+            burstCountCaptured: nil,
+            highestPracticalResolutionUsed: recommendation.capture?.highestPracticalResolution,
+            flashModeUsed: recommendation.flashLowLight?.flashMode,
+            lowLightPolicyUsed: recommendation.flashLowLight?.lowLightRecoveryPolicy,
+            capabilityGaps: ["live_readiness_blocked_demo_best_effort"],
+            substitutions: nil
+        )
+        return SceneRuntimeModels.BeforeCaptureFinalMomentHandoff(
+            scenePlanId: scenePlan.scenePlanId,
+            styleProfileId: scenePlan.styleProfileId,
+            protectedSubjectSetId: scenePlan.protectedSubjectSetId,
+            sceneInputQualityContext: scenePlan.sceneInputQualityContext,
+            initialCameraSettingsRecommendation: recommendation,
+            runtimeAffordanceSignals: scenePlan.runtimeAffordanceSignals,
+            postCapturePrerequisites: SceneRuntimeModels.PostCapturePrerequisites(
+                mustCaptureCorrectly: scenePlan.postCapturePrerequisites.mustCaptureCorrectly,
+                canFineTuneLater: scenePlan.postCapturePrerequisites.canFineTuneLater,
+                statusAtCapture: statusAtCapture
+            ),
+            capturedAffordanceMetadata: capturedAffordanceMetadata,
+            cameraSettingsUsed: settingsUsed,
+            persistenceWriteIntent: ["demo_best_effort_before_capture_handoff"]
+        )
     }
 
     private func handleFinalPhotoCapture(_ image: UIImage) {
@@ -1165,13 +1240,18 @@ struct ContentView: View {
     }
 
     private func localTestFrameIndex(from source: String) -> Int? {
-        guard let range = source.range(of: "frame_local_test_") ?? source.range(of: "asset_local_test_") else {
-            return nil
+        for marker in ["frame_local_test_", "asset_local_test_", "frame_demo_", "asset_demo_"] {
+            guard let range = source.range(of: marker) else { continue }
+            let suffix = source[range.upperBound...]
+            let numericRuns = suffix.split { !$0.isNumber }
+            guard let frameNumberText = numericRuns.last,
+                  let number = Int(frameNumberText),
+                  number > 0 else {
+                continue
+            }
+            return number - 1
         }
-        let suffix = source[range.upperBound...]
-        let digits = suffix.reversed().prefix { $0.isNumber }.reversed()
-        guard let number = Int(String(digits)), number > 0 else { return nil }
-        return number - 1
+        return nil
     }
 
     @ViewBuilder
@@ -1185,7 +1265,7 @@ struct ContentView: View {
             ProfileView(
                 savedPortfolios: savedPortfolios,
                 bookmarkFolders: $bookmarkFolders,
-                savedMoments: savedMoments,
+                savedMoments: $savedMoments,
                 avatarAsset: "HooverTower",
                 deleteFolderAction: deleteBookmarkFolder,
                 removeSavedPortfolioAction: removeSavedPortfolio,
@@ -1410,6 +1490,7 @@ struct ContentView: View {
             LiveCoachingView(
                 candidate: sceneCandidate,
                 state: sceneRuntimeLiveCoachState,
+                scenePlan: sceneRuntimeScenePlan,
                 scenePlanOutput: phoneTestScenePlanOutput,
                 liveReadinessOutput: phoneTestLiveReadinessOutput,
                 canOpenFinalShooting: sceneRuntimeScenePlan != nil && !isFinalCaptureInProgress,
@@ -1420,7 +1501,7 @@ struct ContentView: View {
                 },
                 captureAction: {
                     Task {
-                        await captureFinalPhotoFromLiveCoach()
+                        await prepareFinalShootingCamera()
                     }
                 },
                 backAction: {
@@ -1432,7 +1513,14 @@ struct ContentView: View {
         case .finalShooting:
             FinalShootingCameraStep(
                 candidate: sceneCandidate,
+                scenePlan: sceneRuntimeScenePlan,
                 scenePlanOutput: phoneTestScenePlanOutput,
+                liveCoachState: sceneRuntimeLiveCoachState,
+                runReadiness: {
+                    Task {
+                        await runSceneRuntimeReadiness()
+                    }
+                },
                 captureAction: handleFinalPhotoCapture,
                 backAction: {
                     step = .liveCoach
@@ -3608,7 +3696,7 @@ struct SubjectCalibrationView: View {
         }
         .fullScreenCover(isPresented: $isShowingSimulatedCamera) {
             SubjectSimulatedCameraView {
-                referenceImage = UIImage(named: "SubjectSelfieReference") ?? DemoSelfieImage.make()
+                referenceImage = UIImage(named: "SubjectSelfieCleanReference") ?? DemoSelfieImage.make()
                 if let referenceImage {
                     calibrationResult = PhoneTestSubjectCalibrationResult.fromAdapter(for: referenceImage, sessionId: sessionId)
                 }
@@ -3661,79 +3749,78 @@ struct SubjectSimulatedCameraView: View {
     let cancelAction: () -> Void
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
+        GeometryReader { proxy in
+            let safeBottom = max(proxy.safeAreaInsets.bottom, 18)
 
-            Image("SubjectSelfieReference")
-                .resizable()
-                .scaledToFill()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay(.black.opacity(0.18))
-                .clipped()
+            ZStack {
+                Color.black.ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                HStack {
-                    Color.clear.frame(width: 42, height: 42)
+                Image("SubjectSelfieCleanReference")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .overlay(.black.opacity(0.18))
+                    .clipped()
+                    .ignoresSafeArea()
 
-                    Spacer()
-
+                VStack(spacing: 0) {
                     Text("Subject selfie")
                         .font(.custom("AvenirNext-DemiBold", size: 12))
                         .kerning(2.4)
                         .textCase(.uppercase)
                         .foregroundStyle(.white.opacity(0.82))
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 70)
 
                     Spacer()
 
-                    Color.clear.frame(width: 42, height: 42)
-                }
-                .padding(.horizontal, 22)
-                .padding(.top, 70)
+                    VStack(spacing: 16) {
+                        Text("Fit everyone’s face inside the frame.")
+                            .font(.custom("AvenirNext-Regular", size: 14))
+                            .foregroundStyle(.white.opacity(0.86))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(.black.opacity(0.36), in: Capsule())
 
-                Spacer()
-
-                VStack(spacing: 18) {
-                    Text("Fit everyone’s face inside the frame.")
-                        .font(.custom("AvenirNext-Regular", size: 14))
-                        .foregroundStyle(.white.opacity(0.82))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(.black.opacity(0.36), in: Capsule())
-
-                    Button(action: captureAction) {
-                        ZStack {
-                            Circle()
-                                .stroke(.white.opacity(0.92), lineWidth: 4)
-                                .frame(width: 76, height: 76)
-                            Circle()
-                                .fill(.white)
-                                .frame(width: 60, height: 60)
+                        Button(action: captureAction) {
+                            ZStack {
+                                Circle()
+                                    .stroke(.white.opacity(0.94), lineWidth: 4)
+                                    .frame(width: 76, height: 76)
+                                Circle()
+                                    .fill(.white)
+                                    .frame(width: 60, height: 60)
+                            }
                         }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Capture subject selfie")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Capture subject selfie")
+                    .frame(width: proxy.size.width, alignment: .center)
+                    .padding(.bottom, safeBottom + 22)
                 }
-                .padding(.bottom, 48)
-            }
+                .frame(width: proxy.size.width, height: proxy.size.height)
 
-            VStack {
-                HStack {
-                    Button(action: cancelAction) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
-                            .background(.black.opacity(0.62), in: Circle())
+                VStack {
+                    HStack {
+                        Button(action: cancelAction) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 44, height: 44)
+                                .background(.black.opacity(0.62), in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Close camera")
+
+                        Spacer()
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Close camera")
+                    .padding(.horizontal, 22)
+                    .padding(.top, 70)
 
                     Spacer()
                 }
-                .padding(.leading, 22)
-                .padding(.top, 70)
-
-                Spacer()
             }
         }
     }
@@ -3753,7 +3840,7 @@ struct SubjectSelfieCard: View {
                                 .resizable()
                                 .scaledToFill()
                         } else {
-                            Image("SubjectSelfieReference")
+                            Image("SubjectSelfieCleanReference")
                                 .resizable()
                                 .scaledToFill()
                         }
@@ -5345,12 +5432,15 @@ struct SceneCalculatingButton: View {
 struct LiveCoachingView: View {
     let candidate: SceneCandidate
     let state: SceneRuntimeLiveCoachUIState
+    let scenePlan: SceneRuntimeModels.GenerateScenePlanResponse?
     let scenePlanOutput: PhoneTestScenePlanOutput?
     let liveReadinessOutput: PhoneTestLiveReadinessOutput?
     let canOpenFinalShooting: Bool
     let runReadiness: () -> Void
     let captureAction: () -> Void
     let backAction: () -> Void
+
+    @StateObject private var speechCoach = LiveCoachingSpeechCoach()
 
     private var isReady: Bool {
         state.isReadyToCapture
@@ -5406,7 +5496,7 @@ struct LiveCoachingView: View {
                 VStack {
                     Spacer()
                     HStack {
-                        LiveCueStack(cues: state.displayCues, isReady: isReady)
+                        LiveCueStack(cues: displayCues, isReady: isReady)
                             .frame(width: 160)
                             .padding(.leading, 12)
                         Spacer()
@@ -5437,6 +5527,44 @@ struct LiveCoachingView: View {
                 .ignoresSafeArea(edges: .bottom)
             }
         }
+        .task {
+            speechCoach.start(prompts: spokenCoachingPrompts)
+        }
+        .onChange(of: spokenPromptSignature) { _, _ in
+            speechCoach.start(prompts: spokenCoachingPrompts)
+        }
+        .onDisappear {
+            speechCoach.stop()
+        }
+    }
+
+    private var displayCues: [SceneRuntimeModels.CoachingCue] {
+        if isGraduationSingleSubjectDemo {
+            return GraduationSingleSubjectDemoGuidance.cues
+        }
+        return state.displayCues
+    }
+
+    private var spokenCoachingPrompts: [String] {
+        displayCues.map { spokenSentence($0.message) }
+    }
+
+    private var spokenPromptSignature: String {
+        spokenCoachingPrompts.joined(separator: "|")
+    }
+
+    private var isGraduationSingleSubjectDemo: Bool {
+        let styleProfileId = scenePlan?.styleProfileId ?? scenePlanOutput?.scenePlan.styleProfileId ?? ""
+        return styleProfileId.lowercased().contains("graduation")
+    }
+
+    private func spokenSentence(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.first else { return "" }
+        let sentence = first.uppercased() + trimmed.dropFirst()
+        return sentence.hasSuffix(".") || sentence.hasSuffix("!") || sentence.hasSuffix("?")
+            ? sentence
+            : sentence + "."
     }
 }
 
@@ -5508,7 +5636,10 @@ struct ScenePlanOutputSummaryCard: View {
 
 struct FinalShootingCameraStep: View {
     let candidate: SceneCandidate
+    let scenePlan: SceneRuntimeModels.GenerateScenePlanResponse?
     let scenePlanOutput: PhoneTestScenePlanOutput?
+    let liveCoachState: SceneRuntimeLiveCoachUIState
+    let runReadiness: () -> Void
     let captureAction: (UIImage) -> Void
     let backAction: () -> Void
 
@@ -5531,8 +5662,11 @@ struct FinalShootingCameraStep: View {
             title: "Final Photo",
             permissionPrompt: "Camera access is needed to capture the final photo.",
             runningPrompt: scenePlanOutput?.operatorPosition.framingCue ?? "Frame the final photo",
+            spokenPrompts: spokenCoachingPrompts,
+            guidanceOverlay: cameraGuidanceOverlay,
             captureAccessibilityLabel: "Capture final photo",
             preferredPosition: .back,
+            demoFallbackImage: UIImage(named: candidate.assetName) ?? DemoSelfieImage.make(),
             captureAction: captureAction,
             cancelAction: backAction
         )
@@ -5550,6 +5684,79 @@ struct FinalShootingCameraStep: View {
             .frame(height: 34)
             .background(.black.opacity(0.48), in: Capsule())
     }
+
+    private var cameraGuidanceOverlay: PhoneTestCameraGuidanceOverlay {
+        PhoneTestCameraGuidanceOverlay(
+            readiness: liveCoachState.readiness,
+            displayCues: displayCues,
+            settingBadges: liveCoachState.settingBadges,
+            standPointTitle: standPointTitle,
+            guidePlacement: guidePlacement,
+            subjectCue: scenePlan?.subjectPosition.distanceCue ?? scenePlanOutput?.subjectPosition.distanceCue,
+            operatorCue: scenePlan?.operatorPosition.framingCue ?? scenePlanOutput?.operatorPosition.framingCue,
+            cameraRecommendation: scenePlan?.initialCameraSettingsRecommendation ?? scenePlanOutput?.initialCameraSettingsRecommendation,
+            checkAction: runReadiness,
+            retakeAction: backAction
+        )
+    }
+
+    private var displayCues: [SceneRuntimeModels.CoachingCue] {
+        if isGraduationSingleSubjectDemo {
+            return GraduationSingleSubjectDemoGuidance.cues
+        }
+        return liveCoachState.displayCues
+    }
+
+    private var guidePlacement: PhoneTestCameraGuidePlacement {
+        let zone = (scenePlan?.subjectPosition.zone ?? scenePlanOutput?.subjectPosition.zone ?? "").lowercased()
+        if isGraduationSingleSubjectDemo || zone.contains("graduation_single") {
+            return .graduationSingleSubject
+        }
+        if zone.contains("sit") || zone.contains("bench") || zone.contains("seated") {
+            return .seatedSubject
+        }
+        return .environmentalStanding
+    }
+
+    private var standPointTitle: String {
+        if isGraduationSingleSubjectDemo {
+            return "Stand here"
+        }
+        let rawTitle = scenePlan?.standPoint.label ?? scenePlanOutput?.standPoint.label ?? defaultStandPointTitle
+        let trimmed = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? defaultStandPointTitle : trimmed
+    }
+
+    private var defaultStandPointTitle: String {
+        guidePlacement == .seatedSubject ? "Sit here" : "Stand here"
+    }
+
+    private var isGraduationSingleSubjectDemo: Bool {
+        let styleProfileId = scenePlan?.styleProfileId ?? scenePlanOutput?.scenePlan.styleProfileId ?? ""
+        return styleProfileId.lowercased().contains("graduation")
+    }
+
+    private var spokenCoachingPrompts: [String] {
+        displayCues.map { spokenSentence($0.message) }
+    }
+
+    private func spokenSentence(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.first else { return "" }
+        let sentence = first.uppercased() + trimmed.dropFirst()
+        return sentence.hasSuffix(".") || sentence.hasSuffix("!") || sentence.hasSuffix("?")
+            ? sentence
+            : sentence + "."
+    }
+}
+
+enum GraduationSingleSubjectDemoGuidance {
+    static let cues: [SceneRuntimeModels.CoachingCue] = [
+        SceneRuntimeModels.CoachingCue(target: "subject", message: "Smile softly and look here."),
+        SceneRuntimeModels.CoachingCue(target: "subject", message: "Take one small step back."),
+        SceneRuntimeModels.CoachingCue(target: "subject", message: "Turn shoulders toward the light.")
+    ]
+
 }
 
 struct LiveCameraGrid: View {
@@ -7245,7 +7452,7 @@ struct ShareSheet: UIViewControllerRepresentable {
 struct ProfileView: View {
     let savedPortfolios: [CuratedPortfolio]
     @Binding var bookmarkFolders: [BookmarkFolder]
-    let savedMoments: [SavedBloomingMoment]
+    @Binding var savedMoments: [SavedBloomingMoment]
     let avatarAsset: String
     let deleteFolderAction: (BookmarkFolder) -> Void
     let removeSavedPortfolioAction: (CuratedPortfolio) -> Void
@@ -7295,8 +7502,7 @@ struct ProfileView: View {
                         momentGroups: momentGroups,
                         openAllAction: {
                             activeProfileSheet = .moments(
-                                title: momentGroups.first?.sceneTitle ?? "Graduation",
-                                moments: displayMoments
+                                title: momentGroups.first?.sceneTitle ?? "Graduation"
                             )
                         },
                         openMomentAction: { _, moments, index in
@@ -7342,10 +7548,11 @@ struct ProfileView: View {
         }
         .sheet(item: modalSheetBinding) { sheet in
             switch sheet {
-            case .moments(let title, let moments):
+            case .moments(let title):
                 ProfileMomentsFolderView(
                     title: title,
-                    moments: moments,
+                    moments: momentsForProfileSheet(title),
+                    deleteMomentsAction: removeSavedMoments,
                     openMomentAction: { moments, index in
                         activeProfileSheet = .image(moments: moments, initialIndex: index)
                     }
@@ -7366,11 +7573,11 @@ struct ProfileView: View {
         if let moments = momentGroups.first?.moments, !moments.isEmpty {
             return moments
         }
-        return ProfileSavedMomentsPanel.fallbackMoments
+        return []
     }
 
     private var displayedPortfolios: [CuratedPortfolio] {
-        savedPortfolios.isEmpty ? AppContent.scenarios[0].portfolios : savedPortfolios
+        savedPortfolios
     }
 
     private var modalSheetBinding: Binding<ProfileSheet?> {
@@ -7390,16 +7597,24 @@ struct ProfileView: View {
     private func portfolios(in folder: BookmarkFolder) -> [CuratedPortfolio] {
         savedPortfolios.filter { folder.portfolioIds.contains($0.id) }
     }
+
+    private func momentsForProfileSheet(_ title: String) -> [SavedBloomingMoment] {
+        savedMoments.filter { $0.sceneTitle == title }
+    }
+
+    private func removeSavedMoments(_ ids: Set<UUID>) {
+        savedMoments.removeAll { ids.contains($0.id) }
+    }
 }
 
 enum ProfileSheet: Identifiable {
-    case moments(title: String, moments: [SavedBloomingMoment])
+    case moments(title: String)
     case portfolios
     case image(moments: [SavedBloomingMoment], initialIndex: Int)
 
     var id: String {
         switch self {
-        case .moments(let title, _):
+        case .moments(let title):
             return "moments-\(title)"
         case .portfolios:
             return "portfolios"
@@ -7432,14 +7647,14 @@ struct ProfileSavedMomentsPanel: View {
         if let moments = momentGroups.first?.moments, !moments.isEmpty {
             return Array(moments.prefix(6))
         }
-        return Self.fallbackMoments
+        return []
     }
 
     private var carouselMoments: [SavedBloomingMoment] {
         if let moments = momentGroups.first?.moments, !moments.isEmpty {
             return moments
         }
-        return Self.fallbackMoments
+        return []
     }
 
     var body: some View {
@@ -7468,7 +7683,7 @@ struct ProfileSavedMomentsPanel: View {
                     Text(displayTitle)
                         .font(.custom("AvenirNext-DemiBold", size: 14.5))
                         .foregroundStyle(AppPalette.gold)
-                    Text("\(max(32, displayMoments.count)) moments")
+                    Text("\(displayMoments.count) moment\(displayMoments.count == 1 ? "" : "s")")
                         .font(.custom("AvenirNext-Regular", size: 10.5))
                         .foregroundStyle(AppPalette.ivory.opacity(0.64))
                 }
@@ -7485,8 +7700,18 @@ struct ProfileSavedMomentsPanel: View {
                 .overlay { Capsule().stroke(AppPalette.hairline, lineWidth: 1) }
             }
 
-            ProfileMomentsGrid(moments: displayMoments) { moment, _, index in
-                openMomentAction(moment, carouselMoments, index)
+            if displayMoments.isEmpty {
+                EmptyProfileState(
+                    icon: "photo.on.rectangle",
+                    title: "No saved moments yet",
+                    subtitle: "Fine tune and save photos to keep them here."
+                )
+                .padding(12)
+                .background(AppPalette.paper.opacity(0.72), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            } else {
+                ProfileMomentsGrid(moments: displayMoments) { moment, _, index in
+                    openMomentAction(moment, carouselMoments, index)
+                }
             }
         }
         .padding(12)
@@ -7540,10 +7765,6 @@ struct ProfileFavoritePortfolioPanel: View {
     let openAllAction: () -> Void
     let openPortfolioAction: (CuratedPortfolio) -> Void
 
-    private var portfolio: CuratedPortfolio {
-        portfolios.first ?? AppContent.graduationPortfolio
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack {
@@ -7564,32 +7785,42 @@ struct ProfileFavoritePortfolioPanel: View {
                 .buttonStyle(.plain)
             }
 
-            Button {
-                openPortfolioAction(portfolio)
-            } label: {
-                HStack(spacing: 12) {
-                    BookmarkPreviewImage(assets: portfolio.assets)
-                        .frame(width: 112, height: 56)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(portfolio.title)
-                            .font(.custom("BodoniSvtyTwoITCTT-Book", size: 16))
-                            .foregroundStyle(AppPalette.ivory)
-                            .lineLimit(2)
-                        HStack(spacing: 7) {
-                            PhotographerAvatar(assetName: portfolio.avatarAsset, name: portfolio.author)
-                                .frame(width: 20, height: 20)
-                            Text("by \(portfolio.author)")
-                                .font(.custom("AvenirNext-Regular", size: 10.8))
-                                .foregroundStyle(AppPalette.gold)
+            if let portfolio = portfolios.first {
+                Button {
+                    openPortfolioAction(portfolio)
+                } label: {
+                    HStack(spacing: 12) {
+                        BookmarkPreviewImage(assets: portfolio.assets)
+                            .frame(width: 112, height: 56)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(portfolio.title)
+                                .font(.custom("BodoniSvtyTwoITCTT-Book", size: 16))
+                                .foregroundStyle(AppPalette.ivory)
+                                .lineLimit(2)
+                            HStack(spacing: 7) {
+                                PhotographerAvatar(assetName: portfolio.avatarAsset, name: portfolio.author)
+                                    .frame(width: 20, height: 20)
+                                Text("by \(portfolio.author)")
+                                    .font(.custom("AvenirNext-Regular", size: 10.8))
+                                    .foregroundStyle(AppPalette.gold)
+                            }
                         }
+                        Spacer()
+                        Image(systemName: "bookmark.fill")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(AppPalette.gold)
                     }
-                    Spacer()
-                    Image(systemName: "bookmark.fill")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(AppPalette.gold)
                 }
+                .buttonStyle(.plain)
+            } else {
+                EmptyProfileState(
+                    icon: "bookmark",
+                    title: "No saved portfolios yet",
+                    subtitle: "Save a photographer portfolio to keep it here."
+                )
+                .padding(12)
+                .background(AppPalette.paper.opacity(0.72), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
             }
-            .buttonStyle(.plain)
 
             Rectangle()
                 .fill(AppPalette.hairline.opacity(0.65))
@@ -7664,37 +7895,140 @@ struct ProfileFolderSelection: Identifiable {
 struct ProfileMomentsFolderView: View {
     let title: String
     let moments: [SavedBloomingMoment]
+    let deleteMomentsAction: (Set<UUID>) -> Void
     let openMomentAction: ([SavedBloomingMoment], Int) -> Void
+    @State private var isEditing = false
+    @State private var selectedMomentIds: Set<UUID> = []
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 9), count: 3)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(title)
-                .font(.custom("BodoniSvtyTwoITCTT-Book", size: 28))
-                .foregroundStyle(AppPalette.ivory)
-                .padding(.top, 20)
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .font(.custom("BodoniSvtyTwoITCTT-Book", size: 28))
+                    .foregroundStyle(AppPalette.ivory)
+
+                Spacer()
+
+                Button(isEditing ? "Done" : "Edit") {
+                    withAnimation(.snappy(duration: 0.18)) {
+                        isEditing.toggle()
+                        selectedMomentIds.removeAll()
+                    }
+                }
+                .font(.custom("AvenirNext-DemiBold", size: 13))
+                .foregroundStyle(AppPalette.gold)
+                .disabled(moments.isEmpty)
+            }
+            .padding(.top, 20)
+
             Text("\(moments.count) blooming moment\(moments.count == 1 ? "" : "s")")
                 .font(.custom("AvenirNext-Regular", size: 13))
                 .foregroundStyle(AppPalette.ivory.opacity(0.58))
 
-            ScrollView(showsIndicators: true) {
-                LazyVGrid(columns: columns, spacing: 9) {
-                    ForEach(Array(moments.enumerated()), id: \.element.id) { index, moment in
-                        Button {
-                            openMomentAction(moments, index)
-                        } label: {
-                            MomentThumbnail(moment: moment)
+            if moments.isEmpty {
+                EmptyProfileState(
+                    icon: "photo.on.rectangle",
+                    title: "No saved moments yet",
+                    subtitle: "Fine tune and save photos to keep them here."
+                )
+                .padding(14)
+                .background(AppPalette.paper.opacity(0.74), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            } else {
+                ScrollView(showsIndicators: true) {
+                    LazyVGrid(columns: columns, spacing: 9) {
+                        ForEach(Array(moments.enumerated()), id: \.element.id) { index, moment in
+                            Button {
+                                if isEditing {
+                                    toggleSelection(for: moment)
+                                } else {
+                                    openMomentAction(moments, index)
+                                }
+                            } label: {
+                                EditableMomentThumbnail(
+                                    moment: moment,
+                                    isEditing: isEditing,
+                                    isSelected: selectedMomentIds.contains(moment.id)
+                                )
                                 .aspectRatio(0.72, contentMode: .fit)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(isEditing ? "Select saved moment \(index + 1)" : "Open saved moment \(index + 1)")
                         }
-                        .buttonStyle(.plain)
                     }
+                    .padding(.bottom, isEditing ? 94 : 28)
                 }
-                .padding(.bottom, 28)
+            }
+
+            if isEditing {
+                Button {
+                    let idsToDelete = selectedMomentIds
+                    guard !idsToDelete.isEmpty else { return }
+                    withAnimation(.snappy(duration: 0.2)) {
+                        deleteMomentsAction(idsToDelete)
+                        selectedMomentIds.removeAll()
+                        if moments.count == idsToDelete.count {
+                            isEditing = false
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: "trash")
+                        Text(selectedMomentIds.isEmpty ? "Select photos to delete" : "Delete Selected")
+                    }
+                    .font(.custom("AvenirNext-DemiBold", size: 14))
+                    .foregroundStyle(selectedMomentIds.isEmpty ? AppPalette.ivory.opacity(0.48) : .white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .background(selectedMomentIds.isEmpty ? AppPalette.paper.opacity(0.68) : Color.red.opacity(0.90), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(selectedMomentIds.isEmpty)
             }
         }
         .padding(.horizontal, 22)
         .background(AppPalette.paperBright)
+        .onChange(of: moments.map(\.id)) { _, ids in
+            selectedMomentIds = selectedMomentIds.intersection(Set(ids))
+            if ids.isEmpty {
+                isEditing = false
+            }
+        }
+    }
+
+    private func toggleSelection(for moment: SavedBloomingMoment) {
+        if selectedMomentIds.contains(moment.id) {
+            selectedMomentIds.remove(moment.id)
+        } else {
+            selectedMomentIds.insert(moment.id)
+        }
+    }
+}
+
+struct EditableMomentThumbnail: View {
+    let moment: SavedBloomingMoment
+    let isEditing: Bool
+    let isSelected: Bool
+
+    var body: some View {
+        MomentThumbnail(moment: moment)
+            .overlay(alignment: .topTrailing) {
+                if isEditing {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(isSelected ? Color.red.opacity(0.95) : AppPalette.paperBright.opacity(0.88))
+                        .shadow(color: .black.opacity(0.22), radius: 5, y: 2)
+                        .padding(7)
+                }
+            }
+            .overlay {
+                if isEditing && isSelected {
+                    RoundedRectangle(cornerRadius: AppChrome.radiusSmall, style: .continuous)
+                        .stroke(Color.red.opacity(0.92), lineWidth: 3)
+                }
+            }
+            .opacity(isEditing && !isSelected ? 0.72 : 1)
     }
 }
 

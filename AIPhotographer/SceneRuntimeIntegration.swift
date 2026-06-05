@@ -466,6 +466,7 @@ struct LocalTestScenePlanProvider: ScenePlanGenerationProvider {
         schemaVersion: String
     ) async throws -> SceneRuntimeModels.GenerateScenePlanResponse {
         try SceneRuntimeServiceSchema.validate(schemaVersion, operation: .generateScenePlan)
+        let isGraduation = request.styleProfileId.lowercased().contains("graduation")
         return SceneRuntimeModels.GenerateScenePlanResponse(
             scenePlanId: "scene_plan_\(request.sceneAnalysisId.replacingOccurrences(of: "scene_analysis_", with: ""))",
             sceneAnalysisId: request.sceneAnalysisId,
@@ -486,35 +487,19 @@ struct LocalTestScenePlanProvider: ScenePlanGenerationProvider {
             runtimeAffordanceSignals: Self.runtimeAffordanceSignals(),
             postCapturePrerequisites: Self.postCapturePrerequisites(),
             postCaptureFineTuneSignals: [.portfolioColorTone, .cropComposition, .lightShadowContrast, .backgroundReadabilityOrSubjectSeparation],
-            standPoint: SceneRuntimeModels.LabeledDescription(
-                label: "Soft side light near the anchor",
-                description: "Keep protected-subject faces in soft light while preserving the place cue."
-            ),
-            subjectPosition: SceneRuntimeModels.SubjectPosition(
-                zone: "open_light_edge",
-                distanceCue: "stand where faces stay bright and the background remains readable"
-            ),
-            operatorPosition: SceneRuntimeModels.OperatorPosition(
-                distanceCue: "step back until heads and the scene anchor have room",
-                heightCue: "hold the phone around chest height",
-                framingCue: "keep protected subjects and the anchor inside the guide"
-            ),
-            facingDirection: SceneRuntimeModels.FacingDirection(
-                subjectCue: "turn gently toward the softer side light",
-                operatorCue: "face the phone toward the subjects and anchor"
-            ),
+            standPoint: Self.standPoint(isGraduation: isGraduation),
+            subjectPosition: Self.subjectPosition(isGraduation: isGraduation),
+            operatorPosition: Self.operatorPosition(isGraduation: isGraduation),
+            facingDirection: Self.facingDirection(isGraduation: isGraduation),
             roughFraming: SceneRuntimeModels.RoughFraming(
                 style: "wide_environmental",
                 safetyMargin: "high",
                 orientation: "vertical"
             ),
-            coachingCues: [
-                SceneRuntimeModels.CoachingCue(target: "operator", message: "Step back until protected subjects and the scene anchor fit."),
-                SceneRuntimeModels.CoachingCue(target: "subjects", message: "Turn gently toward the softer side light."),
-                SceneRuntimeModels.CoachingCue(target: "subjects", message: "Walk together slowly and keep talking to each other.")
-            ],
+            coachingCues: Self.coachingCues(isGraduation: isGraduation),
             initialCameraSettingsRecommendation: Self.initialCameraSettingsRecommendation(
-                scenePlanId: request.sceneAnalysisId
+                scenePlanId: request.sceneAnalysisId,
+                isGraduation: isGraduation
             ),
             fallback: request.sceneInputQualityContext.allowsSuboptimalSceneInput
                 ? SceneRuntimeModels.ScenePlanFallback(
@@ -601,21 +586,87 @@ struct LocalTestScenePlanProvider: ScenePlanGenerationProvider {
         )
     }
 
+    private static func standPoint(isGraduation: Bool) -> SceneRuntimeModels.LabeledDescription {
+        if isGraduation {
+            return SceneRuntimeModels.LabeledDescription(
+                label: "Stand here",
+                description: "Place the subject where the face catches the softest available indoor light with a simple readable background."
+            )
+        }
+        return SceneRuntimeModels.LabeledDescription(
+            label: "Soft side light near the anchor",
+            description: "Keep protected-subject faces in soft light while preserving the place cue."
+        )
+    }
+
+    private static func subjectPosition(isGraduation: Bool) -> SceneRuntimeModels.SubjectPosition {
+        if isGraduation {
+            return SceneRuntimeModels.SubjectPosition(
+                zone: "graduation_single_subject_soft_indoor_light",
+                distanceCue: "stand inside the guide with the face bright and shoulders relaxed"
+            )
+        }
+        return SceneRuntimeModels.SubjectPosition(
+            zone: "open_light_edge",
+            distanceCue: "stand where faces stay bright and the background remains readable"
+        )
+    }
+
+    private static func operatorPosition(isGraduation: Bool) -> SceneRuntimeModels.OperatorPosition {
+        if isGraduation {
+            return SceneRuntimeModels.OperatorPosition(
+                distanceCue: "step back until the head and upper body fit comfortably",
+                heightCue: "hold the phone just below eye level",
+                framingCue: "keep the face inside the guide and leave a little space above the head"
+            )
+        }
+        return SceneRuntimeModels.OperatorPosition(
+            distanceCue: "step back until heads and the scene anchor have room",
+            heightCue: "hold the phone around chest height",
+            framingCue: "keep protected subjects and the anchor inside the guide"
+        )
+    }
+
+    private static func facingDirection(isGraduation: Bool) -> SceneRuntimeModels.FacingDirection {
+        if isGraduation {
+            return SceneRuntimeModels.FacingDirection(
+                subjectCue: "turn shoulders toward the softest available light",
+                operatorCue: "meter on the face and keep the background calm"
+            )
+        }
+        return SceneRuntimeModels.FacingDirection(
+            subjectCue: "turn gently toward the softer side light",
+            operatorCue: "face the phone toward the subjects and anchor"
+        )
+    }
+
+    private static func coachingCues(isGraduation: Bool) -> [SceneRuntimeModels.CoachingCue] {
+        if isGraduation {
+            return GraduationSingleSubjectDemoGuidance.cues
+        }
+        return [
+            SceneRuntimeModels.CoachingCue(target: "operator", message: "Step back until protected subjects and the scene anchor fit."),
+            SceneRuntimeModels.CoachingCue(target: "subjects", message: "Turn gently toward the softer side light."),
+            SceneRuntimeModels.CoachingCue(target: "subjects", message: "Walk together slowly and keep talking to each other.")
+        ]
+    }
+
     private static func initialCameraSettingsRecommendation(
-        scenePlanId: String
+        scenePlanId: String,
+        isGraduation: Bool = false
     ) -> SceneRuntimeModels.InitialCameraSettingsRecommendation {
         SceneRuntimeModels.InitialCameraSettingsRecommendation(
             recommendationId: "camera_rec_\(scenePlanId.replacingOccurrences(of: "scene_analysis_", with: ""))",
             sourceNativeCameraParameterIntentId: "style_profile_runtime.local_test.native_camera_intent",
             focus: SceneRuntimeModels.FocusRecommendation(
-                target: "all_protected_subjects",
+                target: isGraduation ? "single_graduate_face" : "all_protected_subjects",
                 mode: "continuous_then_lock_when_ready",
-                priority: "faces_and_bodies",
-                focusPointStrategy: "protected_subject_face_group"
+                priority: isGraduation ? "single_face_and_upper_body" : "faces_and_bodies",
+                focusPointStrategy: isGraduation ? "guide_center_face_priority" : "protected_subject_face_group"
             ),
             exposure: SceneRuntimeModels.ExposureRecommendation(
                 meteringTarget: "protected_subject_faces",
-                bias: -0.2,
+                bias: isGraduation ? -0.15 : -0.2,
                 protectHighlights: true,
                 avoidFaceClipping: true,
                 avoidFaceShadowCrush: true
@@ -628,7 +679,7 @@ struct LocalTestScenePlanProvider: ScenePlanGenerationProvider {
             ),
             zoomLens: SceneRuntimeModels.ZoomLensRecommendation(
                 preferredLens: "wide",
-                targetZoomFactor: 1.0,
+                targetZoomFactor: isGraduation ? 1.15 : 1.0,
                 maxDigitalZoomFactor: 2.0,
                 allowUltraWideIfOperatorTooClose: true,
                 avoidLensSwitchDuringCapture: true
