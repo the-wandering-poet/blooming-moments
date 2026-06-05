@@ -37,6 +37,7 @@
 		7A0000010000000000000078 /* PhoneTestSubjectSceneAnalysisAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000010000000000000079 /* PhoneTestSubjectSceneAnalysisAdapter.swift */; };
 		7A0000010000000000000080 /* style_profile_training_graduation_local_same_photographer_v1_runtime_contract.json in Resources */ = {isa = PBXBuildFile; fileRef = 7A0000010000000000000081 /* style_profile_training_graduation_local_same_photographer_v1_runtime_contract.json */; };
 		7A0000010000000000000084 /* BundledRuntimeStyleProfileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000010000000000000083 /* BundledRuntimeStyleProfileStore.swift */; };
+		7A0000010000000000000085 /* SubjectSelfieVisionAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000010000000000000086 /* SubjectSelfieVisionAnalyzer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -72,6 +73,7 @@
 		7A0000010000000000000079 /* PhoneTestSubjectSceneAnalysisAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneTestSubjectSceneAnalysisAdapter.swift; sourceTree = "<group>"; };
 		7A0000010000000000000081 /* style_profile_training_graduation_local_same_photographer_v1_runtime_contract.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = style_profile_training_graduation_local_same_photographer_v1_runtime_contract.json; sourceTree = "<group>"; };
 		7A0000010000000000000083 /* BundledRuntimeStyleProfileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundledRuntimeStyleProfileStore.swift; sourceTree = "<group>"; };
+		7A0000010000000000000086 /* SubjectSelfieVisionAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubjectSelfieVisionAnalyzer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -123,6 +125,7 @@
 				7A0000010000000000000075 /* PhoneTestCameraView.swift */,
 				7A0000010000000000000077 /* PhoneTestFrameSignalAdapter.swift */,
 				7A0000010000000000000079 /* PhoneTestSubjectSceneAnalysisAdapter.swift */,
+				7A0000010000000000000086 /* SubjectSelfieVisionAnalyzer.swift */,
 				7A0000010000000000000083 /* BundledRuntimeStyleProfileStore.swift */,
 				7A0000010000000000000082 /* RuntimeStyleProfiles */,
 				7A0000010000000000000006 /* Assets.xcassets */,
@@ -244,6 +247,7 @@
 				7A0000010000000000000074 /* PhoneTestCameraView.swift in Sources */,
 				7A0000010000000000000076 /* PhoneTestFrameSignalAdapter.swift in Sources */,
 				7A0000010000000000000078 /* PhoneTestSubjectSceneAnalysisAdapter.swift in Sources */,
+				7A0000010000000000000085 /* SubjectSelfieVisionAnalyzer.swift in Sources */,
 				7A0000010000000000000084 /* BundledRuntimeStyleProfileStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

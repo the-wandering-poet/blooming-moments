@@ -102,7 +102,7 @@ struct FinalCaptureRenderHandoff {
         cameraSettingsUsed: FinalMomentCameraSettingsUsed? = nil,
         cropBox: FinalMomentNormalizedRect? = nil,
         subjectBoxes: [FinalMomentNormalizedRect] = [],
-        editParameters: FinalMomentEditParameters = .phoneTestDefault
+        editParameters: FinalMomentEditParameters = .graduationTrainingSetPreset
     ) {
         self.sourceRole = sourceRole
         self.finalCapturedImage = finalCapturedImage
@@ -452,6 +452,10 @@ final class CoreImageFineTuneRenderer {
 }
 
 extension FinalMomentEditParameters {
+    static var graduationTrainingSetPreset: FinalMomentEditParameters {
+        TrainingSetFineTunePreset.graduationLocalReviewPackage.editParameters
+    }
+
     static var phoneTestDefault: FinalMomentEditParameters {
         FinalMomentEditParameters(
             exposure: 0.12,
@@ -470,6 +474,37 @@ extension FinalMomentEditParameters {
             grainOrTexture: 0.06
         )
     }
+}
+
+struct TrainingSetFineTunePreset: Equatable {
+    let presetId: String
+    let sourceStyleProfileId: String
+    let sourcePortfolioId: String
+    let evidenceSummary: String
+    let editParameters: FinalMomentEditParameters
+
+    static let graduationLocalReviewPackage = TrainingSetFineTunePreset(
+        presetId: "preset_training_graduation_local_review_neutral_warm_editorial_v1",
+        sourceStyleProfileId: "style_profile_training_graduation_local_same_photographer_v1",
+        sourcePortfolioId: "training_graduation_local_same_photographer_v1",
+        evidenceSummary: "Derived from the bundled graduation runtime style profile: neutral-warm white balance, -0.2 protected-face exposure bias, natural-light protection, crop composition, light-shadow contrast, local crispness, and background readability.",
+        editParameters: FinalMomentEditParameters(
+            exposure: 0.08,
+            contrast: 0.22,
+            warmth: 0.24,
+            highlightRecovery: 0.34,
+            shadowRecovery: 0.14,
+            toneCurve: "training_graduation_neutral_warm_editorial_contrast",
+            localCrispness: 0.16,
+            localSoftness: 0.0,
+            skinToneProtection: 0.84,
+            shadowPatternEmphasis: 0.14,
+            rimLightEmphasis: 0.10,
+            backgroundReadability: 0.16,
+            subjectSeparation: 0.04,
+            grainOrTexture: 0.04
+        )
+    )
 }
 
 private extension UIImage.Orientation {

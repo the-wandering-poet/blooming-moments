@@ -28,10 +28,15 @@ final class PhoneTestCameraController: NSObject, ObservableObject {
     @Published private(set) var capabilities: PhoneTestCameraCapabilities?
 
     private let sessionQueue = DispatchQueue(label: "com.blooming.phone-test-camera.session")
-    private let preferredPosition: AVCaptureDevice.Position = .front
+    private let preferredPosition: AVCaptureDevice.Position
     private var photoOutput: AVCapturePhotoOutput?
     private var captureCompletion: ((UIImage) -> Void)?
     private var isConfigured = false
+
+    init(preferredPosition: AVCaptureDevice.Position = .front) {
+        self.preferredPosition = preferredPosition
+        super.init()
+    }
 
     func start() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {

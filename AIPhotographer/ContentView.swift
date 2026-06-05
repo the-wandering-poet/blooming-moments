@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 import UIKit
 
@@ -200,29 +201,7 @@ struct PhoneTestSubjectCalibrationResult: Equatable {
     let confidenceLabel: String
 
     static func fromAdapter(for image: UIImage, sessionId: String) -> PhoneTestSubjectCalibrationResult {
-        let hasRenderableImage = image.size.width > 0 && image.size.height > 0
-        let selfieAssetRef = "phone-test-subject-selfie://\(UUID().uuidString.lowercased())"
-        let phoneTestProfile = PhoneTestSubjectSceneAnalysisAdapter.subjectProfile(
-            from: PhoneTestSubjectSelfieSignals(
-                source: .deterministicSubjectFallback,
-                selfieAssetRef: selfieAssetRef,
-                observedFaceCount: nil,
-                visibleFacingSubjectCount: nil,
-                ignoredBackgroundPersonCount: nil,
-                facesVisibleEnough: hasRenderableImage ? nil : false,
-                confidence: hasRenderableImage ? 0.25 : 0.05,
-                readinessNotes: hasRenderableImage
-                    ? ["selfie uploaded", "face is clear", "ready for processing"]
-                    : ["selfie unavailable", "subject count needs retry"]
-            ),
-            sessionId: sessionId,
-            fallbackProtectedSubjectCount: hasRenderableImage ? 1 : 0
-        )
-        return PhoneTestSubjectCalibrationResult(
-            profile: SubjectProfile(phoneTestProfile: phoneTestProfile),
-            source: phoneTestProfile.source.rawValue,
-            confidenceLabel: hasRenderableImage ? "Local analysis" : "Needs retry"
-        )
+        SubjectSelfieVisionAnalyzer.calibrationResult(for: image, sessionId: sessionId)
     }
 }
 
@@ -275,6 +254,10 @@ struct PhoneTestFinalMomentABCResult {
     }
 }
 
+private enum PhoneTestFinalCaptureFlowError: Error {
+    case missingScenePlan
+}
+
 struct ContentView: View {
     private let scenarios = AppContent.scenarios
     private static let launchArguments = ProcessInfo.processInfo.arguments
@@ -309,6 +292,7 @@ struct ContentView: View {
     @State private var finalCaptureErrorMessage: String?
     @State private var finalMomentABCResult: PhoneTestFinalMomentABCResult?
     @State private var finalMomentRendererErrorMessage: String?
+    @State private var isFinalCaptureInProgress = false
     @State private var isReadyToCapture = false
     @State private var finalMomentService = FinalMomentLocalTestPipelineFacade()
     @State private var finalCaptureResult: FinalMomentCaptureResult?
@@ -633,6 +617,7 @@ struct ContentView: View {
         finalCaptureErrorMessage = nil
         finalMomentABCResult = nil
         finalMomentRendererErrorMessage = nil
+        isFinalCaptureInProgress = false
         if clearSubject {
             subjectProfile = nil
             subjectReferenceImage = nil
@@ -653,15 +638,14 @@ struct ContentView: View {
         finalCaptureErrorMessage = nil
         finalMomentABCResult = nil
         finalMomentRendererErrorMessage = nil
+        isFinalCaptureInProgress = false
         isReadyToCapture = false
     }
 
     private func buildSceneRuntimePlan() async throws -> SceneRuntimeModels.GenerateScenePlanResponse {
         let qualityContext = sceneRuntimeQualitySignals()
         let uploadFailureReason = sceneRuntimeUploadFailureReason()
-        let fallbackPlanOutput = sceneInputMethod == .currentScene
-            ? sceneInputAnalysis.flatMap { PhoneTestSubjectSceneAnalysisAdapter.scenePlan(from: $0) }
-            : nil
+        let fallbackPlanOutput = sceneInputAnalysis.flatMap { PhoneTestSubjectSceneAnalysisAdapter.scenePlan(from: $0) }
         let context = sceneInputAnalysis?.captureContext ?? SceneRuntimeFrontendCaptureContext(
             sessionId: "session_\(selectedScenario.id)_before_capture",
             styleProfileId: selectedPortfolio.styleProfileId,
@@ -689,32 +673,47 @@ struct ContentView: View {
         currentSceneUploadStatus = .ready
         allowsSuboptimalSceneInput = false
         sceneReferenceImage = image
-        analyzeCurrentScenePhoto(image, uploadAnyway: false)
+        analyzeSceneInputImage(image, mode: .singlePhoto, uploadAnyway: false)
+    }
+
+    private func handleScanSurroundingsCapture(_ image: UIImage) {
+        sceneInputMethod = .scanSurroundings
+        scanUploadStatus = .ready
+        allowsSuboptimalSceneInput = false
+        sceneReferenceImage = image
+        analyzeSceneInputImage(image, mode: .scanVideo, uploadAnyway: false)
     }
 
     private func continueFromCurrentScene(uploadAnyway: Bool) {
         allowsSuboptimalSceneInput = uploadAnyway
         if uploadAnyway, let sceneReferenceImage {
-            analyzeCurrentScenePhoto(sceneReferenceImage, uploadAnyway: true)
+            analyzeSceneInputImage(sceneReferenceImage, mode: .singlePhoto, uploadAnyway: true)
         }
         step = .sceneCalculating
     }
 
-    private func analyzeCurrentScenePhoto(_ image: UIImage, uploadAnyway: Bool) {
+    private func analyzeSceneInputImage(
+        _ image: UIImage,
+        mode: SceneRuntimeModels.SceneInputMode,
+        uploadAnyway: Bool
+    ) {
         let hasRenderableImage = image.size.width > 0 && image.size.height > 0
         let protectedSubjectSetId = subjectProfile?.protectedSubjectSetId ?? "protected_subject_set_1"
-        let sceneMediaRef = "phone-test-scene-photo://\(UUID().uuidString.lowercased())"
+        let sceneMediaRefPrefix = mode == .scanVideo ? "phone-test-scene-scan-frame" : "phone-test-scene-photo"
+        let sceneMediaRef = "\(sceneMediaRefPrefix)://\(UUID().uuidString.lowercased())"
         sceneInputAnalysis = PhoneTestSubjectSceneAnalysisAdapter.sceneInputAnalysis(
             from: PhoneTestSceneInputSignals(
-                source: .deterministicLocalFallback,
+                source: .iosSceneHeuristic,
                 sceneMediaRef: sceneMediaRef,
-                sceneInputMode: .singlePhoto,
+                sceneInputMode: mode,
                 uploadAnyway: uploadAnyway,
                 qualitySignals: sceneRuntimeQualitySignals(),
                 failureReason: sceneRuntimeUploadFailureReason(),
                 candidateTitle: sceneCandidate.title,
                 candidateNotes: [
-                    "scene photo captured from current-scene camera",
+                    mode == .scanVideo
+                        ? "surroundings scan captured from native back camera as a representative scene frame"
+                        : "scene photo captured from native back camera",
                     "not reused from subject selfie",
                     "styleProfileId = \(selectedPortfolio.styleProfileId)",
                     "protectedSubjectSetId = \(protectedSubjectSetId)"
@@ -795,25 +794,49 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func prepareFinalShootingCamera() async {
+    private func buildFinalCaptureHandoff() async throws -> SceneRuntimeModels.BeforeCaptureFinalMomentHandoff {
         guard let scenePlan = sceneRuntimeScenePlan else {
-            return
+            throw PhoneTestFinalCaptureFlowError.missingScenePlan
         }
+
+        let liveState = sceneRuntimeLiveCoachState.response == nil
+            ? try await makeConservativeLiveReadinessState(for: scenePlan)
+            : sceneRuntimeLiveCoachState
+        return try await sceneRuntimeIntegration.buildCaptureHandoff(
+            scenePlan: scenePlan,
+            liveCoachState: liveState
+        )
+    }
+
+    @MainActor
+    private func prepareFinalShootingCamera() async {
+        await runFinalCapturePreparation {
+            step = .finalShooting
+        }
+    }
+
+    @MainActor
+    private func captureFinalPhotoFromLiveCoach() async {
+        guard !isFinalCaptureInProgress else { return }
+        isFinalCaptureInProgress = true
+        await runFinalCapturePreparation {
+            let image = UIImage(named: sceneCandidate.assetName) ?? sceneReferenceImage ?? DemoSelfieImage.make()
+            handleFinalPhotoCapture(image)
+        }
+        isFinalCaptureInProgress = false
+    }
+
+    @MainActor
+    private func runFinalCapturePreparation(onPrepared: () -> Void) async {
         do {
-            let liveState = sceneRuntimeLiveCoachState.response == nil
-                ? try await makeConservativeLiveReadinessState(for: scenePlan)
-                : sceneRuntimeLiveCoachState
-            let handoff = try await sceneRuntimeIntegration.buildCaptureHandoff(
-                scenePlan: scenePlan,
-                liveCoachState: liveState
-            )
+            let handoff = try await buildFinalCaptureHandoff()
             beforeCaptureRuntimeHandoff = handoff
             finalCapturedPhotoA = nil
             finalCaptureRenderHandoff = nil
             finalCaptureErrorMessage = nil
             finalMomentABCResult = nil
             finalMomentRendererErrorMessage = nil
-            step = .finalShooting
+            onPrepared()
         } catch {
             finalCaptureErrorMessage = "Final shooting handoff could not be prepared from the current scene plan."
             isReadyToCapture = false
@@ -1035,6 +1058,7 @@ struct ContentView: View {
         } catch {
             finalCaptureResult = nil
             finalAutoCullResult = nil
+            finalCaptureErrorMessage = "Final capture could not be prepared. Please check the scene again."
             isReadyToCapture = false
         }
     }
@@ -1333,7 +1357,11 @@ struct ContentView: View {
                 }
             )
         case .scanSurroundings:
-            ScanSurroundingsView(candidate: sceneCandidate, uploadStatus: $scanUploadStatus) { shouldUploadAnyway in
+            ScanSurroundingsView(
+                candidate: sceneCandidate,
+                uploadStatus: $scanUploadStatus,
+                captureAction: handleScanSurroundingsCapture
+            ) { shouldUploadAnyway in
                 allowsSuboptimalSceneInput = shouldUploadAnyway
                 step = .sceneCalculating
             } backAction: {
@@ -1356,6 +1384,7 @@ struct ContentView: View {
                 inputMethod: sceneInputMethod,
                 candidate: sceneCandidate,
                 portfolioTitle: selectedPortfolio.title,
+                portfolioAuthor: selectedPortfolio.author,
                 analysisState: sceneRuntimeAnalysisState,
                 allowsSuboptimalInput: allowsSuboptimalSceneInput,
                 runSceneAnalysis: buildSceneRuntimePlan,
@@ -1383,7 +1412,7 @@ struct ContentView: View {
                 state: sceneRuntimeLiveCoachState,
                 scenePlanOutput: phoneTestScenePlanOutput,
                 liveReadinessOutput: phoneTestLiveReadinessOutput,
-                canOpenFinalShooting: sceneRuntimeScenePlan != nil,
+                canOpenFinalShooting: sceneRuntimeScenePlan != nil && !isFinalCaptureInProgress,
                 runReadiness: {
                     Task {
                         await runSceneRuntimeReadiness()
@@ -1391,7 +1420,7 @@ struct ContentView: View {
                 },
                 captureAction: {
                     Task {
-                        await prepareFinalShootingCamera()
+                        await captureFinalPhotoFromLiveCoach()
                     }
                 },
                 backAction: {
@@ -1466,6 +1495,7 @@ struct ContentView: View {
 
 struct AppContent {
     static let reneeGraduationAssets = [
+        "ReneeGraduationLead01", "ReneeGraduationLead02", "ReneeGraduationLead03",
         "ReneeGraduation01", "ReneeGraduation02", "ReneeGraduation03", "ReneeGraduation04", "ReneeGraduation05",
         "ReneeGraduation06", "ReneeGraduation07", "ReneeGraduation08", "ReneeGraduation09", "ReneeGraduation10",
         "ReneeGraduation11", "ReneeGraduation12", "ReneeGraduation13", "ReneeGraduation14", "ReneeGraduation15",
@@ -1483,10 +1513,16 @@ struct AppContent {
     ]
 
     static let mockGradAssets = ["MockGradPhoto01", "MockGradPhoto02", "MockGradPhoto03"]
+    static let alternateMockGradAssets = ["MockGradAltPhoto01", "MockGradAltPhoto02", "MockGradAltPhoto03"]
     static let mockWeddingAssets = ["MockWeddingPhoto01", "MockWeddingPhoto02", "MockWeddingPhoto03"]
+    static let softWeddingAssets = ["MockWeddingAltPhoto01", "MockWeddingAltPhoto02", "MockWeddingAltPhoto03"]
+    static let editorialWeddingAssets = ["MockWeddingAltPhoto04", "MockWeddingAltPhoto05", "MockWeddingAltPhoto06"]
     static let parenthoodMockAAssets = ["MockParenthoodPhoto01", "MockParenthoodPhoto02", "MockParenthoodPhoto03"]
     static let parenthoodMockBAssets = ["MockParenthoodPhoto04", "MockParenthoodPhoto05", "MockParenthoodPhoto06"]
     static let parenthoodMockCAssets = ["MockParenthoodPhoto07", "MockParenthoodPhoto08", "MockParenthoodPhoto09"]
+    static let quietParenthoodAssets = ["MockParenthoodAltPhoto01", "MockParenthoodAltPhoto02", "MockParenthoodAltPhoto03"]
+    static let goldenParenthoodAssets = ["MockParenthoodAltPhoto04", "MockParenthoodAltPhoto05", "MockParenthoodAltPhoto06"]
+    static let editorialParenthoodAssets = ["MockParenthoodPhoto07", "MockParenthoodAltPhoto02", "MockParenthoodAltPhoto05"]
 
     static func generatedShots(
         for assets: [String],
@@ -1509,20 +1545,20 @@ struct AppContent {
 
     static let graduationPortfolio = CuratedPortfolio(
         id: "renee_graduation_training_set",
-        title: "Renee Graduation Portfolio",
+        title: "Spring delights",
         author: "Renee",
         avatarAsset: "AvatarReneeGraduation",
-        photographerBio: "Real graduation training set. Natural campus scenes, airy movement, and quiet landmark scale.",
+        photographerBio: "Renee photographs people at their happiest.\nShe lets sunlight, movement, and tenderness bloom.",
         locationSummary: "Campus lawns, arches, tower views, and graduation portraits",
         styleSummary: "Soft daylight, editorial framing, relaxed graduation movement",
         assets: reneeGraduationAssets,
-        tags: ["real training set", "graduation", "campus"],
+        tags: ["soft daylight", "campus scale", "gentle motion"],
         shots: generatedShots(
             for: Array(reneeGraduationAssets.prefix(12)),
             idPrefix: "renee-graduation",
             location: "Campus graduation setting",
             gesture: "Keep the subject relaxed and let campus scale or natural movement lead the frame.",
-            tags: ["real", "graduation", "campus"]
+            tags: ["soft daylight", "campus", "movement"]
         ),
         styleProfileId: "style_profile_training_graduation_local_same_photographer_v1",
         styleProfileVersion: "0.1.0-draft",
@@ -1533,20 +1569,20 @@ struct AppContent {
 
     static let softPortraitPortfolio = CuratedPortfolio(
         id: "mock_graduation_soft_campus",
-        title: "Soft Campus Portraits (Mock)",
-        author: "Maya Lin (Mock)",
+        title: "Soft Campus Portraits",
+        author: "Maya Lin",
         avatarAsset: "MockGradAvatarMaya",
-        photographerBio: "Mock portfolio generated for layout testing. Soft campus portraits with calm cap-and-gown compositions.",
+        photographerBio: "Maya keeps portraits gentle and open.\nShe favors calm expressions, soft greens, and easy daylight.",
         locationSummary: "Open lawn, tower edges, shaded paths",
         styleSummary: "Clean portraits, soft greens, calm expressions",
         assets: mockGradAssets,
-        tags: ["mock", "portrait", "soft light"],
+        tags: ["portrait", "soft light", "calm"],
         shots: generatedShots(
             for: mockGradAssets,
             idPrefix: "mock-grad-soft",
-            location: "Mock campus graduation setting",
+            location: "Campus graduation setting",
             gesture: "Stand naturally, turn toward soft light, keep the composition simple.",
-            tags: ["mock", "portrait", "soft"]
+            tags: ["portrait", "soft", "campus"]
         ),
         styleProfileId: "mock_graduation_soft_campus_v1",
         styleProfileVersion: "mock",
@@ -1557,20 +1593,20 @@ struct AppContent {
 
     static let cinematicCampusPortfolio = CuratedPortfolio(
         id: "mock_graduation_editorial_motion",
-        title: "Editorial Campus Motion (Mock)",
-        author: "Elena Park (Mock)",
+        title: "Editorial Campus Motion",
+        author: "Elena Park",
         avatarAsset: "MockGradAvatarElena",
-        photographerBio: "Mock portfolio generated for layout testing. Graduation scenes with movement, scale, and warm campus architecture.",
+        photographerBio: "Elena frames graduation like a small film.\nShe looks for motion, scale, and warm campus architecture.",
         locationSummary: "Arches, tower paths, and warm campus courtyards",
         styleSummary: "Editorial motion, landmark scale, soft gold light",
-        assets: ["MockGradPhoto03", "MockGradPhoto01", "MockGradPhoto02"],
-        tags: ["mock", "editorial", "movement"],
+        assets: alternateMockGradAssets,
+        tags: ["editorial", "movement", "campus"],
         shots: generatedShots(
-            for: ["MockGradPhoto03", "MockGradPhoto01", "MockGradPhoto02"],
+            for: alternateMockGradAssets,
             idPrefix: "mock-grad-editorial",
-            location: "Mock campus editorial setting",
+            location: "Campus editorial setting",
             gesture: "Move lightly through the frame and keep the campus background visible.",
-            tags: ["mock", "motion", "editorial"]
+            tags: ["motion", "editorial", "campus"]
         ),
         styleProfileId: "mock_graduation_editorial_motion_v1",
         styleProfileVersion: "mock",
@@ -1584,17 +1620,17 @@ struct AppContent {
         title: "Kari Bjorn Wedding Portfolio",
         author: "Kari Bjorn",
         avatarAsset: "AvatarKariBjorn",
-        photographerBio: "Real wedding training set from Kari Bjorn. Warm outdoor portraits, movement, and intimate couple framing.",
+        photographerBio: "Kari follows warmth, motion, and honest laughter.\nHis wedding frames feel open, bright, and deeply present.",
         locationSummary: "Outdoor wedding landscapes, intimate portraits, rings, and celebration details",
         styleSummary: "Warm natural light, romantic distance, candid movement",
         assets: kariWeddingAssets,
-        tags: ["real training set", "wedding", "warm light"],
+        tags: ["warm light", "candid motion", "romantic"],
         shots: generatedShots(
             for: Array(kariWeddingAssets.prefix(12)),
             idPrefix: "kari-wedding",
             location: "Outdoor wedding setting",
             gesture: "Let the couple move naturally, stay close enough for emotion, and protect warm backlight.",
-            tags: ["real", "wedding", "romantic"]
+            tags: ["warm light", "candid", "romantic"]
         ),
         styleProfileId: "style_profile_training_wedding_kari_bjorn_v1",
         styleProfileVersion: "0.1.0-draft",
@@ -1605,20 +1641,20 @@ struct AppContent {
 
     static let mockWeddingSoftPortfolio = CuratedPortfolio(
         id: "mock_wedding_soft_hillside",
-        title: "Soft Hillside Wedding (Mock)",
-        author: "Sofia Reyes (Mock)",
+        title: "Soft Hillside Wedding",
+        author: "Sofia Reyes",
         avatarAsset: "MockWeddingAvatarSofia",
-        photographerBio: "Mock portfolio generated for layout testing. Warm hillside couple portraits with open air and soft distance.",
+        photographerBio: "Sofia favors open air and soft distance.\nHer couples feel relaxed, warm, and lightly windswept.",
         locationSummary: "Hillside vows, lake views, outdoor couple movement",
         styleSummary: "Warm backlight, romantic space, quiet gesture",
-        assets: mockWeddingAssets,
-        tags: ["mock", "wedding", "hillside"],
+        assets: softWeddingAssets,
+        tags: ["soft haze", "hillside", "warm air"],
         shots: generatedShots(
-            for: mockWeddingAssets,
+            for: softWeddingAssets,
             idPrefix: "mock-wedding-soft",
-            location: "Mock hillside wedding setting",
+            location: "Hillside wedding setting",
             gesture: "Walk slowly together and keep the couple in warm side light.",
-            tags: ["mock", "wedding", "warm"]
+            tags: ["soft haze", "hillside", "warm"]
         ),
         styleProfileId: "mock_wedding_soft_hillside_v1",
         styleProfileVersion: "mock",
@@ -1629,20 +1665,20 @@ struct AppContent {
 
     static let mockWeddingEditorialPortfolio = CuratedPortfolio(
         id: "mock_wedding_editorial_light",
-        title: "Editorial Wedding Light (Mock)",
-        author: "Miles Chen (Mock)",
+        title: "Editorial Wedding Light",
+        author: "Miles Chen",
         avatarAsset: "MockWeddingAvatarMiles",
-        photographerBio: "Mock portfolio generated for layout testing. Editorial couple moments with clean architecture and golden natural light.",
+        photographerBio: "Miles keeps wedding frames polished and graphic.\nHe looks for clean lines, glow, and quiet contrast.",
         locationSummary: "Architecture, open fields, and soft couple portraits",
         styleSummary: "Clean frames, romantic contrast, polished natural light",
-        assets: ["MockWeddingPhoto03", "MockWeddingPhoto01", "MockWeddingPhoto02"],
-        tags: ["mock", "wedding", "editorial"],
+        assets: editorialWeddingAssets,
+        tags: ["clean lines", "gold glow", "editorial"],
         shots: generatedShots(
-            for: ["MockWeddingPhoto03", "MockWeddingPhoto01", "MockWeddingPhoto02"],
+            for: editorialWeddingAssets,
             idPrefix: "mock-wedding-editorial",
-            location: "Mock editorial wedding setting",
+            location: "Editorial wedding setting",
             gesture: "Face each other naturally and let the background geometry stay simple.",
-            tags: ["mock", "wedding", "editorial"]
+            tags: ["clean lines", "gold glow", "editorial"]
         ),
         styleProfileId: "mock_wedding_editorial_light_v1",
         styleProfileVersion: "mock",
@@ -1653,20 +1689,20 @@ struct AppContent {
 
     static let mockParenthoodQuietPortfolio = CuratedPortfolio(
         id: "mock_parenthood_quiet_nursery",
-        title: "Quiet Nursery Keepsakes (Mock)",
-        author: "Lina Zhou (Mock)",
+        title: "Quiet Nursery Keepsakes",
+        author: "Lina Zhou",
         avatarAsset: "MockParenthoodAvatarLina",
-        photographerBio: "Mock portfolio generated for layout testing. Gentle parenthood moments in soft indoor light.",
+        photographerBio: "Lina photographs the smallest pauses.\nShe keeps the light soft and the family contact gentle.",
         locationSummary: "Nursery light, newborn details, calm family touch",
         styleSummary: "Soft white light, gentle hands, intimate close framing",
-        assets: parenthoodMockAAssets,
-        tags: ["mock", "parenthood", "nursery"],
+        assets: quietParenthoodAssets,
+        tags: ["soft white", "close touch", "nursery"],
         shots: generatedShots(
-            for: parenthoodMockAAssets,
+            for: quietParenthoodAssets,
             idPrefix: "mock-parenthood-nursery",
-            location: "Mock nursery setting",
+            location: "Nursery setting",
             gesture: "Keep hands relaxed and let small details carry the moment.",
-            tags: ["mock", "parenthood", "soft"]
+            tags: ["soft white", "close touch", "nursery"]
         ),
         styleProfileId: "mock_parenthood_quiet_nursery_v1",
         styleProfileVersion: "mock",
@@ -1677,20 +1713,20 @@ struct AppContent {
 
     static let mockParenthoodGoldenPortfolio = CuratedPortfolio(
         id: "mock_parenthood_golden_family",
-        title: "Golden Family Field (Mock)",
-        author: "Theo Morgan (Mock)",
-        avatarAsset: "MockParenthoodAvatarTheo",
-        photographerBio: "Mock portfolio generated for layout testing. Outdoor family portraits with golden-hour warmth.",
+        title: "Golden Family Field",
+        author: "Theo Morgan",
+        avatarAsset: "MockParenthoodAvatarNoah",
+        photographerBio: "Theo leans into warm movement and closeness.\nHis family frames feel sunlit, playful, and unforced.",
         locationSummary: "Outdoor fields, family holding, toddler portraits",
         styleSummary: "Golden light, close family contact, warm open space",
-        assets: parenthoodMockBAssets,
-        tags: ["mock", "family", "golden hour"],
+        assets: goldenParenthoodAssets,
+        tags: ["golden hour", "family", "warm field"],
         shots: generatedShots(
-            for: parenthoodMockBAssets,
+            for: goldenParenthoodAssets,
             idPrefix: "mock-parenthood-golden",
-            location: "Mock golden-hour field",
+            location: "Golden-hour field",
             gesture: "Hold close, move slowly, and let the child respond naturally.",
-            tags: ["mock", "family", "golden"]
+            tags: ["golden hour", "family", "warm"]
         ),
         styleProfileId: "mock_parenthood_golden_family_v1",
         styleProfileVersion: "mock",
@@ -1701,20 +1737,20 @@ struct AppContent {
 
     static let mockParenthoodEditorialPortfolio = CuratedPortfolio(
         id: "mock_parenthood_editorial_home",
-        title: "Editorial Home Story (Mock)",
-        author: "Clara Bennett (Mock)",
+        title: "Editorial Home Story",
+        author: "Clara Bennett",
         avatarAsset: "MockParenthoodAvatarClara",
-        photographerBio: "Mock portfolio generated for layout testing. Home-based parenthood stories with soft editorial rhythm.",
+        photographerBio: "Clara brings a quiet editorial rhythm home.\nShe balances detail crops with relaxed family portraits.",
         locationSummary: "Home couch, baby hands, soft window light",
         styleSummary: "Close details, calm home composition, gentle warmth",
-        assets: parenthoodMockCAssets,
-        tags: ["mock", "home", "newborn"],
+        assets: editorialParenthoodAssets,
+        tags: ["window light", "home story", "details"],
         shots: generatedShots(
-            for: parenthoodMockCAssets,
+            for: editorialParenthoodAssets,
             idPrefix: "mock-parenthood-home",
-            location: "Mock home parenthood setting",
+            location: "Home parenthood setting",
             gesture: "Stay close, keep faces relaxed, and let small contact become the anchor.",
-            tags: ["mock", "home", "newborn"]
+            tags: ["window light", "home", "details"]
         ),
         styleProfileId: "mock_parenthood_editorial_home_v1",
         styleProfileVersion: "mock",
@@ -2117,56 +2153,235 @@ struct PortfolioDetailProfileHeader: View {
     }
 
     private var profileBio: String {
-        "\(portfolio.profileStatus.replacingOccurrences(of: "_", with: " ")).\n\(portfolio.publishStatus.replacingOccurrences(of: "_", with: " ")).\n\(portfolio.contentSource.replacingOccurrences(of: "_", with: " "))."
+        portfolio.photographerBio
     }
 }
 
 struct PortfolioDetailGallery: View {
     let assets: [String]
     let openPhoto: (Int) -> Void
+    private let spacing: CGFloat = 7
 
     var body: some View {
-        HStack(alignment: .top, spacing: 7) {
-            ForEach(0..<2, id: \.self) { column in
-                VStack(spacing: 7) {
-                    ForEach(columnItems(for: column), id: \.offset) { item in
-                        detailTile(index: item.offset, assetName: item.assetName, height: tileHeight(for: item.offset))
+        GeometryReader { proxy in
+            let availableWidth = proxy.size.width
+
+            VStack(spacing: spacing) {
+                ForEach(Array(galleryGroups.enumerated()), id: \.offset) { sectionIndex, group in
+                    mosaicSection(
+                        group,
+                        width: availableWidth,
+                        variant: sectionIndex % 3
+                    )
+                }
+            }
+            .frame(width: availableWidth, alignment: .leading)
+        }
+        .frame(height: galleryHeight)
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private func mosaicSection(
+        _ items: [(offset: Int, assetName: String)],
+        width: CGFloat,
+        variant: Int
+    ) -> some View {
+        let third = (width - spacing * 2) / 3
+        let half = (width - spacing) / 2
+        let twoThirds = third * 2 + spacing
+
+        switch items.count {
+        case 0:
+            EmptyView()
+        case 1:
+            detailTile(item: items[0], width: width, height: 148)
+        case 2:
+            HStack(spacing: spacing) {
+                detailTile(item: items[0], width: half, height: 152)
+                detailTile(item: items[1], width: half, height: 152)
+            }
+        case 3:
+            VStack(spacing: spacing) {
+                detailTile(item: items[0], width: width, height: 138)
+                HStack(spacing: spacing) {
+                    detailTile(item: items[1], width: half, height: 154)
+                    detailTile(item: items[2], width: half, height: 154)
+                }
+            }
+        case 4:
+            VStack(spacing: spacing) {
+                HStack(spacing: spacing) {
+                    detailTile(item: items[0], width: twoThirds, height: 128)
+                    detailTile(item: items[1], width: third, height: 128)
+                }
+                HStack(spacing: spacing) {
+                    detailTile(item: items[2], width: third, height: 148)
+                    detailTile(item: items[3], width: twoThirds, height: 148)
+                }
+            }
+        case 5:
+            VStack(spacing: spacing) {
+                HStack(spacing: spacing) {
+                    detailTile(item: items[0], width: third, height: 218)
+                    VStack(spacing: spacing) {
+                        detailTile(item: items[1], width: twoThirds, height: 104)
+                        detailTile(item: items[2], width: twoThirds, height: 107)
                     }
                 }
-                .frame(maxWidth: .infinity)
+                HStack(spacing: spacing) {
+                    detailTile(item: items[3], width: half, height: 132)
+                    detailTile(item: items[4], width: half, height: 132)
+                }
+            }
+        case 6:
+            VStack(spacing: spacing) {
+                HStack(spacing: spacing) {
+                    detailTile(item: items[0], width: half, height: 142)
+                    detailTile(item: items[1], width: half, height: 142)
+                }
+                HStack(spacing: spacing) {
+                    detailTile(item: items[2], width: third, height: 176)
+                    detailTile(item: items[3], width: third, height: 176)
+                    detailTile(item: items[4], width: third, height: 176)
+                }
+                detailTile(item: items[5], width: width, height: 118)
+            }
+        default:
+            fullMosaicSection(items, width: width, variant: variant)
+        }
+    }
+
+    @ViewBuilder
+    private func fullMosaicSection(
+        _ items: [(offset: Int, assetName: String)],
+        width: CGFloat,
+        variant: Int
+    ) -> some View {
+        let third = (width - spacing * 2) / 3
+        let twoThirds = third * 2 + spacing
+
+        if variant == 1 {
+            VStack(spacing: spacing) {
+                detailTile(item: items[0], width: width, height: 126)
+                HStack(spacing: spacing) {
+                    detailTile(item: items[1], width: third, height: 212)
+                    VStack(spacing: spacing) {
+                        detailTile(item: items[2], width: twoThirds, height: 100)
+                        HStack(spacing: spacing) {
+                            detailTile(item: items[3], width: third, height: 105)
+                            detailTile(item: items[4], width: third, height: 105)
+                        }
+                    }
+                }
+                HStack(spacing: spacing) {
+                    detailTile(item: items[5], width: twoThirds, height: 124)
+                    detailTile(item: items[6], width: third, height: 124)
+                }
+            }
+        } else if variant == 2 {
+            VStack(spacing: spacing) {
+                HStack(spacing: spacing) {
+                    detailTile(item: items[0], width: twoThirds, height: 136)
+                    detailTile(item: items[1], width: third, height: 136)
+                }
+                HStack(spacing: spacing) {
+                    VStack(spacing: spacing) {
+                        detailTile(item: items[2], width: third, height: 104)
+                        detailTile(item: items[3], width: third, height: 126)
+                    }
+                    detailTile(item: items[4], width: twoThirds, height: 237)
+                }
+                HStack(spacing: spacing) {
+                    detailTile(item: items[5], width: third, height: 118)
+                    detailTile(item: items[6], width: twoThirds, height: 118)
+                }
+            }
+        } else {
+            VStack(spacing: spacing) {
+                HStack(spacing: spacing) {
+                    detailTile(item: items[0], width: third, height: 232)
+                    VStack(spacing: spacing) {
+                        HStack(spacing: spacing) {
+                            detailTile(item: items[1], width: third, height: 110)
+                            detailTile(item: items[2], width: third, height: 110)
+                        }
+                        detailTile(item: items[3], width: twoThirds, height: 115)
+                    }
+                }
+                HStack(spacing: spacing) {
+                    detailTile(item: items[4], width: twoThirds, height: 132)
+                    detailTile(item: items[5], width: third, height: 132)
+                }
+                detailTile(item: items[6], width: width, height: 118)
             }
         }
     }
 
-    private func columnItems(for column: Int) -> [(offset: Int, assetName: String)] {
-        assets.enumerated()
-            .filter { $0.offset % 2 == column }
-            .map { (offset: $0.offset, assetName: $0.element) }
+    private var galleryHeight: CGFloat {
+        guard !assets.isEmpty else { return 0 }
+        return Array(galleryGroups.enumerated()).reduce(CGFloat.zero) { total, pair in
+            total + sectionHeight(itemCount: pair.element.count, variant: pair.offset % 3)
+        } + spacing * CGFloat(max(0, galleryGroups.count - 1))
     }
 
-    private func tileHeight(for index: Int) -> CGFloat {
-        let pattern: [CGFloat] = [212, 148, 174, 128, 196, 156]
-        return pattern[index % pattern.count]
+    private var galleryGroups: [[(offset: Int, assetName: String)]] {
+        let items = assets.enumerated().map { (offset: $0.offset, assetName: $0.element) }
+        var groups: [[(offset: Int, assetName: String)]] = []
+        var index = 0
+
+        while index < items.count {
+            let remaining = items.count - index
+            let count = remaining <= 7 ? remaining : 7
+            groups.append(Array(items[index..<(index + count)]))
+            index += count
+        }
+
+        return groups
     }
 
-    private func detailTile(index: Int, assetName: String, height: CGFloat) -> some View {
+    private func sectionHeight(itemCount: Int, variant: Int) -> CGFloat {
+        switch itemCount {
+        case 0:
+            return 0
+        case 1:
+            return 148
+        case 2:
+            return 152
+        case 3:
+            return 138 + spacing + 154
+        case 4:
+            return 128 + spacing + 148
+        case 5:
+            return 218 + spacing + 132
+        case 6:
+            return 142 + spacing + 176 + spacing + 118
+        default:
+            switch variant {
+            case 1:
+                return 126 + spacing + 212 + spacing + 124
+            case 2:
+                return 136 + spacing + 237 + spacing + 118
+            default:
+                return 232 + spacing + 132 + spacing + 118
+            }
+        }
+    }
+
+    private func detailTile(item: (offset: Int, assetName: String), width: CGFloat, height: CGFloat) -> some View {
         Button {
-            openPhoto(index)
+            openPhoto(item.offset)
         } label: {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(AppPalette.paperBright.opacity(0.42))
-
-                Image(assetName)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: height)
-                    .clipped()
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: height)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            Image(item.assetName)
+                .resizable()
+                .scaledToFill()
+                .frame(width: width, height: height)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .shadow(color: AppPalette.oliveShadow.opacity(0.10), radius: 4, y: 2)
         }
+        .frame(width: width, height: height)
         .buttonStyle(.plain)
         .accessibilityLabel("Open portfolio photo")
     }
@@ -3778,6 +3993,7 @@ struct SceneChoiceView: View {
 struct ScanSurroundingsView: View {
     let candidate: SceneCandidate
     @Binding var uploadStatus: SceneUploadStatus
+    let captureAction: (UIImage) -> Void
     let continueAction: (Bool) -> Void
     let backAction: () -> Void
     @State private var isShowingScanCamera = false
@@ -3860,6 +4076,7 @@ struct ScanSurroundingsView: View {
             }
         }
         .fullScreenCover(isPresented: $isShowingScanCamera) {
+            #if targetEnvironment(simulator)
             SimulatedScanCameraView(
                 assetName: candidate.assetName,
                 finishAction: {
@@ -3870,6 +4087,21 @@ struct ScanSurroundingsView: View {
                     isShowingScanCamera = false
                 }
             )
+            #else
+            PhoneTestCameraView(
+                title: "Surroundings Scan",
+                permissionPrompt: "Camera access is needed to capture the surrounding scene.",
+                runningPrompt: "Slowly turn once, then capture the best frame",
+                captureAccessibilityLabel: "Capture surroundings scan frame",
+                preferredPosition: .back
+            ) { image in
+                captureAction(image)
+                isShowingScanCamera = false
+            } cancelAction: {
+                isShowingScanCamera = false
+            }
+            .ignoresSafeArea()
+            #endif
         }
     }
 }
@@ -4329,7 +4561,8 @@ struct CurrentSceneView: View {
                 title: "Scene Photo",
                 permissionPrompt: "Camera access is needed to capture the current scene.",
                 runningPrompt: "Frame the place you want to use",
-                captureAccessibilityLabel: "Capture scene photo"
+                captureAccessibilityLabel: "Capture scene photo",
+                preferredPosition: .back
             ) { image in
                 captureAction(image)
                 canConfirmUpload = false
@@ -4841,6 +5074,7 @@ struct SceneCalculatingView: View {
     let inputMethod: SceneInputMethod
     let candidate: SceneCandidate
     let portfolioTitle: String
+    let portfolioAuthor: String
     let analysisState: SceneRuntimeSceneAnalysisDisplayState?
     let allowsSuboptimalInput: Bool
     let runSceneAnalysis: () async throws -> SceneRuntimeModels.GenerateScenePlanResponse
@@ -4900,7 +5134,11 @@ struct SceneCalculatingView: View {
                             .frame(width: contentWidth)
                             .padding(.top, 2)
 
-                            SceneRecipeSummaryRow(assetName: candidate.assetName, portfolioTitle: portfolioTitle)
+                            SceneRecipeSummaryRow(
+                                assetName: candidate.assetName,
+                                portfolioTitle: portfolioTitle,
+                                portfolioAuthor: portfolioAuthor
+                            )
                                 .frame(width: contentWidth)
                                 .padding(.top, 2)
 
@@ -5048,6 +5286,7 @@ struct SceneAnalysisMetric: View {
 struct SceneRecipeSummaryRow: View {
     let assetName: String
     let portfolioTitle: String
+    let portfolioAuthor: String
 
     var body: some View {
         HStack(spacing: 12) {
@@ -5061,7 +5300,7 @@ struct SceneRecipeSummaryRow: View {
                     .font(.custom("AvenirNext-Regular", size: 12.8))
                     .foregroundStyle(AppPalette.ivory)
                     .lineLimit(1)
-                Text("by Ann Li")
+                Text("by \(portfolioAuthor)")
                     .font(.custom("AvenirNext-Regular", size: 10.5))
                     .foregroundStyle(AppPalette.ivory.opacity(0.56))
             }
@@ -5293,6 +5532,7 @@ struct FinalShootingCameraStep: View {
             permissionPrompt: "Camera access is needed to capture the final photo.",
             runningPrompt: scenePlanOutput?.operatorPosition.framingCue ?? "Frame the final photo",
             captureAccessibilityLabel: "Capture final photo",
+            preferredPosition: .back,
             captureAction: captureAction,
             cancelAction: backAction
         )

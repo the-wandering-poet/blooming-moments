@@ -6,26 +6,32 @@ struct PhoneTestCameraView: View {
     let title: String
     let permissionPrompt: String
     let runningPrompt: String
+    let spokenPrompts: [String]
     let captureAccessibilityLabel: String
     let captureAction: (UIImage) -> Void
     let cancelAction: () -> Void
 
-    @StateObject private var controller = PhoneTestCameraController()
+    @StateObject private var controller: PhoneTestCameraController
+    @StateObject private var speechCoach = LiveCoachingSpeechCoach()
 
     init(
         title: String = "Subject Selfie",
         permissionPrompt: String = "Camera access is needed to capture a subject selfie.",
         runningPrompt: String = "Hold steady",
+        spokenPrompts: [String] = [],
         captureAccessibilityLabel: String = "Capture subject selfie",
+        preferredPosition: AVCaptureDevice.Position = .front,
         captureAction: @escaping (UIImage) -> Void,
         cancelAction: @escaping () -> Void
     ) {
         self.title = title
         self.permissionPrompt = permissionPrompt
         self.runningPrompt = runningPrompt
+        self.spokenPrompts = spokenPrompts
         self.captureAccessibilityLabel = captureAccessibilityLabel
         self.captureAction = captureAction
         self.cancelAction = cancelAction
+        _controller = StateObject(wrappedValue: PhoneTestCameraController(preferredPosition: preferredPosition))
     }
 
     var body: some View {
@@ -93,8 +99,13 @@ struct PhoneTestCameraView: View {
         }
         .task {
             controller.start()
+            updateSpeech(for: controller.state)
+        }
+        .onChange(of: controller.state) { state in
+            updateSpeech(for: state)
         }
         .onDisappear {
+            speechCoach.stop()
             controller.stop()
         }
     }
@@ -131,6 +142,14 @@ struct PhoneTestCameraView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .background(.black.opacity(0.42), in: Capsule())
+    }
+
+    private func updateSpeech(for state: PhoneTestCameraController.State) {
+        guard state == .running else {
+            speechCoach.stop()
+            return
+        }
+        speechCoach.start(prompts: spokenPrompts)
     }
 }
 

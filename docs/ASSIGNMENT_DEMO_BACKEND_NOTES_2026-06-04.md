@@ -16,6 +16,9 @@ This build is a high-fidelity phone-test demo with a minimum viable AI/backend l
 - The style profile is a structured runtime artifact, not a paragraph-only review.
   - `AIPhotographer/RuntimeStyleProfiles/style_profile_training_graduation_local_same_photographer_v1_runtime_contract.json`
   - It includes runtime affordance signals, camera parameter intent, and post-capture fine-tune signals that the runtime can consume.
+- Final Moment fine-tune uses a training-set-derived CoreImage preset.
+  - `TrainingSetFineTunePreset.graduationLocalReviewPackage` maps the Graduation runtime profile's neutral-warm white balance, protected-face exposure bias, light-shadow contrast, crop composition, local crispness, and background readability signals into real pixel edit parameters.
+  - The before/after screen is therefore a CoreImage edit of the captured/input photo, not image regeneration.
 
 ## Demo Fallbacks
 
@@ -29,4 +32,3 @@ This build is a high-fidelity phone-test demo with a minimum viable AI/backend l
 - Scene/cloud analysis should be upgraded to send actual image/video bytes to a multimodal model instead of relying on structured scene metadata.
 - Subject analysis should be upgraded from deterministic phone-test inference to Vision and/or cloud multimodal analysis.
 - Persistence is demo/local only; production database sync remains out of scope for this short demo build.
-
