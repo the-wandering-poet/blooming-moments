@@ -23,9 +23,9 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Blooming uses the camera to capture a selfie reference for guided photo moments.</string>
+	<string>Blooming uses the camera to capture a selfie reference and scene photos/videos for guided photo moments.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Blooming can use your photo library to select a selfie reference when the camera is unavailable.</string>
+	<string>Blooming can use your photo library to save/select/edit photos taken by you.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

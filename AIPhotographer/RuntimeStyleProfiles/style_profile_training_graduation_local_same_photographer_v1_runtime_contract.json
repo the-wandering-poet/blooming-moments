@@ -1,0 +1,92 @@
+{
+  "styleProfileId": "style_profile_training_graduation_local_same_photographer_v1",
+  "portfolioId": "training_graduation_local_same_photographer_v1",
+  "profileVersion": "phone-test-2026-06-04-interim-1",
+  "profileSource": "hand_authored_phone_test_interim",
+  "profileStatus": "draft_runtime_review",
+  "professionalHappyMomentBaseline": {
+    "protectSubjectFaceLight": true,
+    "preferNaturalRelaxedExpression": true,
+    "preferRelationshipInteraction": true,
+    "focusProtectedSubjects": true,
+    "preserveCropHeadroomWhenPossible": true
+  },
+  "runtimeAffordanceSignals": {
+    "sceneAnalysisShouldDetect": [
+      "soft_side_light",
+      "rim_hair_edge_light",
+      "crop_headroom_available",
+      "relationship_interaction_opportunity",
+      "focus_depth_opportunity"
+    ],
+    "liveCoachShouldProtect": [
+      "protected_subject_focus",
+      "usable_face_light",
+      "natural_expression_or_interaction",
+      "crop_headroom",
+      "protected_subjects_visible"
+    ]
+  },
+  "postCaptureFineTuneSignals": [
+    "portfolio_color_tone",
+    "crop_composition",
+    "light_shadow_contrast",
+    "local_crispness_or_softness",
+    "background_readability_or_subject_separation"
+  ],
+  "nativeCameraParameterIntent": {
+    "focus": {
+      "target": "protected_subject_group",
+      "modePreference": "continuous_then_lock_when_ready",
+      "focusPointStrategy": "protected_subject_face_group",
+      "lensPositionStrategy": "auto_subject_distance"
+    },
+    "exposure": {
+      "meteringTarget": "protected_subject_faces",
+      "biasPreference": -0.2,
+      "protectHighlights": true,
+      "avoidFaceShadowCrush": true,
+      "customExposureAllowed": false
+    },
+    "whiteBalance": {
+      "modePreference": "auto_then_lock_when_ready",
+      "colorTemperatureBias": "neutral_warm",
+      "lockWhenFaceLightReady": true
+    },
+    "zoomLensFraming": {
+      "preferredLens": "wide",
+      "allowUltraWideForTightSpaces": true,
+      "avoidDigitalZoomBeyond": 1.5,
+      "preserveCropHeadroom": true
+    },
+    "depthPortrait": {
+      "depthDataPreferred": true,
+      "portraitEffectsMattePreferred": false,
+      "blurStrengthIntent": "subtle",
+      "keepEnvironmentReadable": true
+    },
+    "captureQuality": {
+      "photoQualityPrioritization": "quality",
+      "highResolutionPreferred": true,
+      "burstPreferred": true,
+      "captureResponsiveness": "balanced"
+    },
+    "flashLowLightPolicy": {
+      "preferNaturalLight": true,
+      "flashAllowedOnlyForRecovery": true,
+      "torchAllowedOnlyForRecovery": false
+    },
+    "capabilityPolicy": {
+      "mustReportGaps": true,
+      "allowClosestAvailableFallback": true
+    }
+  },
+  "confidence": {
+    "overall": 0.55,
+    "runtimeContractProjection": 0.8,
+    "professionalHappyMomentBaseline": 0.7,
+    "nativeCameraParameterIntent": 0.68,
+    "postCaptureFineTuneSignals": 0.62,
+    "portfolioDistinctiveness": 0.0
+  }
+}
